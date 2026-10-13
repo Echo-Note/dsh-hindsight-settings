@@ -708,6 +708,16 @@ describe("BANKS_HELP (the in-page explanation of bank resolution)", () => {
     expect(text).toContain('"team::product"');
   });
 
+  it("answers whether the bank is created for you, because that decides if setup is needed", () => {
+    expect(text).toContain("spawns a new bank");
+    expect(text).toContain("creates the bank");
+    expect(text).toContain("no bank is created");
+    expect(text).toContain("defaultBankConfig");
+    expect(text).toContain("manageBankConfig: false");
+    expect(text).toContain("synced: true");
+    expect(text).toContain("seed_started");
+  });
+
   it("tells the user where the resolved bank id can be read", () => {
     // Upstream writes the v2 seed/session banner to the plugin log rather than a TUI toast.
     expect(text).toContain("coding-agents-logs/plugin.log");

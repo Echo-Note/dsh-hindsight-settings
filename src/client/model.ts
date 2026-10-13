@@ -827,6 +827,16 @@ export const BANKS_HELP: readonly HelpSection[] = Object.freeze([
     ],
   },
   {
+    title: "bank 需要我手工建吗？不需要",
+    lines: [
+      "bankIdTemplate 只负责按模板【算出 id】；bank 由插件在该仓库第一次跑 agent 时自动创建，并顺带写入它的基线配置。文档原文：a new repo an agent touches spawns a new bank；defaultBankConfig “travels in the same import that creates the bank”。",
+      "每次会话启动只做缺的部分（bundled deepen 引擎的第一步就是 bank configuration），所以仓库里新出现一个 bank 不需要任何手工操作。",
+      "反过来说：optInOnly 打开后，未列入 optInPaths 的项目【根本不会建库】（no bank is created），那里什么都不记。",
+      "defaultBankConfig 决定新库出生时的基线（默认是服务端值：自动整合开、observations 开、心智模型刷新下限 60s）；manageBankConfig: false 则让插件完全不碰该库自身的配置。写入是【增量】的，不会覆盖你在控制台里调过的值。",
+      "要确认建库与同步是否完成：用 hindsight_sync_status（同步好了会报 synced: true），或在 ~/.hindsight/coding-agents-logs/diag.jsonl 里看 seed_started。",
+    ],
+  },
+  {
     title: "bankIdTemplate 的占位符",
     lines: [
       "{gitProject} —— worktree 感知的仓库名：同一仓库的所有 worktree 共用一个 bank；不在仓库里时，取会话启动目录的名字。",
