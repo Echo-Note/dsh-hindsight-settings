@@ -1,0 +1,19 @@
+# Submission entry for the awesome-dsh-plugin list.
+#
+# The list is generated: copy this file to
+#   data/plugins/Echo-Note__dsh-hindsight-settings.yml
+# in a PR against https://github.com/awesome-dsh-plugin/awesome-dsh-plugin and do not
+# hand-edit its READMEs. One file is the whole submission.
+#
+# Checked by their CI: the repo declares dsh.bundle (it does), the repo is at least one
+# day old, and the READMEs regenerate. The description is read as a claim about this
+# plugin and is verified against the source: "52 documented settings" is asserted by
+# src/fields.test.ts, "40 editable" by the same table, "per-bank overrides" is
+# applyScoped over `banks.<id>`, and "secrets kept out of the page" is the redaction in
+# src/service.ts (also asserted in src/index.test.ts).
+url: https://github.com/Echo-Note/dsh-hindsight-settings
+name: Echo-Note/dsh-hindsight-settings
+category: memory
+description:
+  en: Settings page for the Hindsight coding-agents plugin — reads and writes ~/.hindsight/coding-agent.json, with all 52 documented settings grouped into tabs (40 editable), per-bank overrides, and secret values kept out of the page.
+  zh: Hindsight coding-agents 的设置页 —— 直接在 DSH 设置里读写 ~/.hindsight/coding-agent.json：52 项配置按标签页分组（40 项可编辑），支持按 bank 覆盖，密钥不下发到页面。

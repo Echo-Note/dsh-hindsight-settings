@@ -1,5 +1,5 @@
 /**
- * Browser half of `@local/dsh-hindsight-settings`.
+ * Browser half of `@Echo-Note/dsh-hindsight-settings`.
  *
  * ## Where this page lives, and why
  *
@@ -32,13 +32,23 @@
  * carrier dropped. Assembly faults (arity mismatch, method unmounted, contribution withdrawn) still
  * reject, so each call is guarded on both paths.
  *
+ * ## Language
+ *
+ * Every word this page can show lives in the `dsh-hindsight-settings` namespace's dictionaries
+ * ({@link DICTIONARIES}), registered as an owned effect and read through the framework's `t` seat —
+ * or through `ctx.locale.bind(NS)` when a composition renders the page without a renderer, which is
+ * what the smoke test does. Live switches need no remount: copy is translated at render time, and the
+ * page re-renders from a small external store that follows `ctx.locale.subscribe`. The one piece of
+ * copy the page does NOT own — each field's summary and each group's heading — is selected from the
+ * bundled bilingual table by the active language, with the host's own string as the last resort.
+ *
  * ## The page's shape
  *
  * Seven groups of settings in one column was unreadable, so the surface is now a tab bar: one tab per
- * `FIELD_GROUPS` entry plus a final **按项目（banks）** tab. The header, the config-file path, the
- * availability line and the action bar stay mounted across tabs; only the active tab's field rows
- * render. The banks tab lists `banks.<id>` sections and opens one in a tabs-free form of its own,
- * which reads `describe({ kind: "bank", id })` and writes through `applyScoped`.
+ * `FIELD_GROUPS` entry plus a final banks tab. The header, the config-file path, the availability line
+ * and the action bar stay mounted across tabs; only the active tab's field rows render. The banks tab
+ * lists `banks.<id>` sections and opens one in a tabs-free form of its own, which reads
+ * `describe({ kind: "bank", id })` and writes through `applyScoped`.
  *
  * ## Failure policy
  *
@@ -49,25 +59,29 @@
 
 import * as React from "react";
 import {
+  BANKS_HELP,
   CONTRIBUTION,
-  LOADING_TEXT,
+  DICTIONARIES,
+  LOCALE_NS,
   PAGE_ID,
-  PAGE_LABEL,
   PAGE_ORDER,
   SERVICE_KEY,
   SETTINGS_SLOT,
-  UNSET_TEXT,
-  BANKS_HELP,
+  activeLanguage,
   banksScopeText,
   buildTabs,
   describeAvailability,
   diffDraft,
   draftFromFields,
   fallbackText,
+  fallbackTranslate,
+  fieldSummary,
   formatDefault,
   formatFieldValue,
   isRecord,
   isSettingsView,
+  pageLabel,
+  parseDraft,
   pathsReadOnlyText,
   readOnlyText,
   remoteErrorText,
@@ -75,8 +89,12 @@ import {
   scopedEditorTitle,
   shadowText,
   summarizeApply,
+  unsetText,
   valueSourceNote,
+  type ActiveLanguage,
   type ConfigScope,
+  type CopyKey,
+  type CopyParams,
   type DraftDiff,
   type JsonValue,
   type PageTab,
@@ -85,13 +103,15 @@ import {
   type ServiceState,
   type SettingsFieldView,
   type SettingsView,
+  type Translate,
 } from "./model";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // The cordis surface, structurally typed
 //
-// `@deepseek-ai/cordis` is a peer dependency and is not installed here, so the shape actually used is
-// declared locally. That also keeps the bundle honest: it can only reach what it declares.
+// `@deepseek-ai/cordis` and `@deepseek-ai/dsh-client-locale` are peer dependencies and are not
+// installed here, so the shapes actually used are declared locally. That also keeps the bundle
+// honest: it can only reach what it declares.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 type Disposer = () => void;
@@ -105,16 +125,35 @@ interface RemoteLike {
   $mount(contribution: unknown): Promise<unknown>;
 }
 
+/** The `locale` service as this page uses it: register, bind, and follow the active language. */
+interface LocaleSnapshotLike {
+  /** The active language id. */
+  readonly active: string;
+}
+
+interface LocaleLike {
+  /** Registers one namespace's complete dictionary; both shipped locales are required. */
+  register(
+    ns: string,
+    dicts: {
+      readonly zh: Readonly<Record<string, string>>;
+      readonly en: Readonly<Record<string, string>>;
+    }
+  ): Disposer;
+  /** A stable-identity translate function for the namespace, reading the active locale per call. */
+  bind(ns: string): Translate;
+  /** The current immutable snapshot. */
+  getLocale(): LocaleSnapshotLike;
+  /** Notified on every snapshot change; returns the unsubscribe. */
+  subscribe(listener: () => void): Disposer;
+}
+
 interface ClientContextLike {
   get(name: string): unknown;
   effect?(execute: () => Disposer | void, label?: string): Disposer;
   slots?: SlotsLike;
   remote?: RemoteLike;
 }
-
-/** The message shown when the host offers no Remote service at all. */
-const NO_REMOTE_REASON =
-  "宿主没有提供 Remote 服务（ctx.remote 不存在），本页无法读写配置。请确认 dsh-api-gateway 的客户端半边已加载。";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Plugin exports (the lazy-CJS factory's `module.exports`)
@@ -125,20 +164,22 @@ export const name = "dsh-hindsight-settings";
 /**
  * The hard dependency gate.
  *
- * Every service this half reads is declared, `remote` included: the api-gateway reference states
- * that a plugin calling `ctx.remote.<namespace>` declares both `remote` and `remote.<namespace>`, and
- * cordis refuses a property read on any service that is not injected. Every access still goes through
- * `ctx.get(...)` with a fallback, so a composition without the gateway renders the explanatory line
- * instead of throwing (which is how this page once failed: an undeclared `ctx.remote` property read).
+ * Every service this half reads is declared, `remote`, `locale` and `slots` included: the api-gateway
+ * reference states that a plugin calling `ctx.remote.<namespace>` declares both `remote` and
+ * `remote.<namespace>`, and cordis refuses a property read on any service that is not injected. Every
+ * access still goes through `ctx.get(...)` with a fallback, so a composition without the gateway
+ * renders the explanatory line instead of throwing (which is how this page once failed: an undeclared
+ * `ctx.remote` property read), and a composition without `locale` still registers with the built-in
+ * dictionaries.
  */
-export const inject = ["slots", "remote"];
+export const inject = ["slots", "remote", "locale"];
 
 export function apply(ctx: ClientContextLike): void {
   const report = createReporter(ctx);
   try {
     const slots = ctx.slots;
     report(
-      `apply: slots=${typeof slots} inject=${typeof slots?.inject} register=${typeof slots?.register} effect=${typeof ctx.effect} get=${typeof ctx.get}`
+      `apply: slots=${typeof slots} inject=${typeof slots?.inject} register=${typeof slots?.register} effect=${typeof ctx.effect} get=${typeof ctx.get} locale=${typeof readLocale(ctx)}`
     );
     if (
       slots === undefined ||
@@ -149,13 +190,19 @@ export function apply(ctx: ClientContextLike): void {
       return;
     }
 
+    // Dictionaries and the page's own language link first: the copy rendered on every later path
+    // (including the always-renders fallback card below) reads through them.
+    registerDictionaries(ctx, report);
+    const bridge = createLocaleBridge(ctx, report);
+    const copy = bridge.getSnapshot();
+
     // Built once per `apply`, so the component identity the renderer holds stays stable across
     // renders while still closing over this instance's mount.
     // Setup is reported rather than swallowed: `createServiceStore` builds the mount and the page
     // factory builds the component, and a throw in either used to leave no trace anywhere.
-    let Page: () => React.ReactElement;
+    let Page: (props: unknown) => React.ReactElement;
     try {
-      Page = createPage(createServiceStore(ctx), report);
+      Page = createPage(createServiceStore(ctx), report, bridge);
     } catch (error) {
       // Never leave the user with nothing: the page still appears, carrying the failure text.
       const text = messageOf(error);
@@ -167,9 +214,13 @@ export function apply(ctx: ClientContextLike): void {
           React.createElement(
             "div",
             { className: "dhs-head" },
-            React.createElement("span", { className: "dhs-title" }, PAGE_LABEL)
+            React.createElement("span", { className: "dhs-title" }, pageLabel(copy.t))
           ),
-          React.createElement("div", { className: "dhs-note dhs-warn" }, `初始化失败：${text}`)
+          React.createElement(
+            "div",
+            { className: "dhs-note dhs-warn" },
+            copy.t("unavailable.initFailed", { message: text })
+          )
         );
     }
     // The inject callback can run LATER than this call, so a throw from `register` would escape the
@@ -179,7 +230,16 @@ export function apply(ctx: ClientContextLike): void {
       report("register: calling slots.register");
       try {
         const dispose = slots.register(
-          { name: SETTINGS_SLOT, id: PAGE_ID, order: PAGE_ORDER, label: () => PAGE_LABEL },
+          {
+            name: SETTINGS_SLOT,
+            id: PAGE_ID,
+            order: PAGE_ORDER,
+            // Declared namespace: the rendered component receives the framework's typed `t` seat,
+            // and the navigation label is a thunk so it is re-read on every projection — a live
+            // language switch therefore reaches the nav row without re-registering.
+            locale: LOCALE_NS,
+            label: () => pageLabel(bridge.translate()),
+          },
           Page
         );
         report("register: ok");
@@ -194,7 +254,13 @@ export function apply(ctx: ClientContextLike): void {
           const retry = setTimeout(() => {
             try {
               slots.register(
-                { name: SETTINGS_SLOT, id: PAGE_ID, order: PAGE_ORDER, label: () => PAGE_LABEL },
+                {
+                  name: SETTINGS_SLOT,
+                  id: PAGE_ID,
+                  order: PAGE_ORDER,
+                  locale: LOCALE_NS,
+                  label: () => pageLabel(bridge.translate()),
+                },
                 Page
               );
               report("register: ok on retry");
@@ -222,6 +288,113 @@ export function apply(ctx: ClientContextLike): void {
       error
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Language
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Read `ctx.locale`, accepting only a service that carries the three methods this page calls. */
+function readLocale(ctx: ClientContextLike): LocaleLike | undefined {
+  // `ctx.get`, never `ctx.locale`. Cordis throws `cannot get property "locale" without inject` for a
+  // property read on a service this plugin did not inject, and the optional lookup is the documented
+  // form for a service whose absence the caller handles (`ctx.get("X")` + an undefined check).
+  let candidate: unknown;
+  try {
+    candidate = ctx.get("locale");
+  } catch {
+    return undefined;
+  }
+  return isRecord(candidate) &&
+    typeof candidate.register === "function" &&
+    typeof candidate.bind === "function" &&
+    typeof candidate.getLocale === "function" &&
+    typeof candidate.subscribe === "function"
+    ? (candidate as unknown as LocaleLike)
+    : undefined;
+}
+
+/**
+ * The page's link to the active language.
+ *
+ * `translate()` returns the namespace-bound translate function when a locale service is present
+ * (stable identity, reads the active locale at call time) and the built-in English-bound one
+ * otherwise, so the page can always render. `getSnapshot()`/`subscribe()` follow the service's
+ * snapshot revision, which is why a language switch re-renders the mounted page with no remount and
+ * no re-registration: every string is translated during render.
+ */
+interface LocaleBridge {
+  translate(): Translate;
+  getSnapshot(): { readonly t: Translate; readonly lang: ActiveLanguage };
+  subscribe(listener: () => void): Disposer;
+}
+
+function createLocaleBridge(
+  ctx: ClientContextLike,
+  report: (message: string) => void
+): LocaleBridge {
+  const service = readLocale(ctx);
+  const bound = service === undefined ? undefined : service.bind(LOCALE_NS);
+
+  const translate = (): Translate => bound ?? fallbackTranslate;
+
+  const snapshot = (): { readonly t: Translate; readonly lang: ActiveLanguage } => ({
+    t: translate(),
+    lang: activeLanguage(service?.getLocale().active),
+  });
+
+  return {
+    translate,
+    getSnapshot: snapshot,
+    subscribe(listener: Disposer): Disposer {
+      if (service === undefined) return () => undefined;
+      try {
+        let last = snapshot().lang;
+        report(`locale: active=${service.getLocale().active}`);
+        return service.subscribe(() => {
+          const next = snapshot().lang;
+          // One line per real language change: a dictionary registration also bumps the revision, and
+          // a line per registration would flood the trail at boot.
+          if (next !== last) {
+            last = next;
+            report(`locale: switched to ${next}`);
+          }
+          listener();
+        });
+      } catch (error) {
+        report(`locale: subscribe threw — ${messageOf(error)}`);
+        return () => undefined;
+      }
+    },
+  };
+}
+
+/** Register this page's dictionaries inside an owned effect; both shipped locales, every key. */
+function registerDictionaries(ctx: ClientContextLike, report: (message: string) => void): void {
+  const service = readLocale(ctx);
+  if (service === undefined) {
+    report("locale: no locale service — using the built-in dictionaries (English)");
+    return;
+  }
+  const run = (): Disposer => {
+    try {
+      return service.register(LOCALE_NS, DICTIONARIES);
+    } catch (error) {
+      // A composition that already owns this namespace, or a service that refuses the pair, must not
+      // take the page down: the built-in dictionaries still render every string.
+      report(`locale: register threw — ${messageOf(error)}`);
+      return () => undefined;
+    }
+  };
+  if (typeof ctx.effect === "function") {
+    try {
+      ctx.effect(run, "hindsight-settings: dictionaries");
+      return;
+    } catch (error) {
+      report(`locale: effect threw — ${messageOf(error)}`);
+    }
+  }
+  run();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -317,7 +490,8 @@ async function mount(ctx: ClientContextLike, remote: RemoteLike): Promise<Servic
   if (service === undefined) {
     return {
       kind: "unavailable",
-      reason: `Remote 贡献已提交，但宿主没有挂载 ${SERVICE_KEY}。请确认 dsh-api-gateway 正在服务该命名空间。`,
+      reasonKey: "unavailable.noNamespace",
+      reasonParams: { service: SERVICE_KEY },
     };
   }
   return { kind: "ready", service };
@@ -328,7 +502,9 @@ async function mount(ctx: ClientContextLike, remote: RemoteLike): Promise<Servic
  *
  * The missing-`remote` case is decided **synchronously**, before any promise exists, so the very
  * first render can already say why nothing is editable. Every other outcome is published when the
- * mount settles.
+ * mount settles. Each failure is stored as a copy REQUEST (key + params) rather than a finished
+ * sentence, so the line is rendered in the active language at render time — a switch therefore
+ * re-words an already-shown failure instead of leaving it in the old language.
  */
 function createServiceStore(ctx: ClientContextLike): ServiceStore {
   const listeners = new Set<() => void>();
@@ -347,13 +523,14 @@ function createServiceStore(ctx: ClientContextLike): ServiceStore {
 
   const remote = readRemote(ctx);
   if (remote === undefined) {
-    state = { kind: "unavailable", reason: NO_REMOTE_REASON };
+    state = { kind: "unavailable", reasonKey: "unavailable.noRemote" };
   } else {
     state = { kind: "loading" };
     void mount(ctx, remote).then(publish, (error: unknown) => {
       publish({
         kind: "unavailable",
-        reason: `Remote 贡献挂载失败：${remoteErrorText(error)}`,
+        reasonKey: "unavailable.mountFailed",
+        reasonParams: { message: remoteErrorText(error) },
       });
     });
   }
@@ -378,7 +555,9 @@ function createServiceStore(ctx: ClientContextLike): ServiceStore {
 const STYLE_ID = "dsh-hindsight-settings-styles";
 
 const STYLES = [
-  ".dhs-page{display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--dsw-alias-label-primary,inherit)}",
+  // The trailing padding is clearance for the sticky action bar below, so the last field row can
+  // always be scrolled clear of it.
+  ".dhs-page{display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--dsw-alias-label-primary,inherit);padding-bottom:56px}",
   ".dhs-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}",
   ".dhs-title{font-size:15px;font-weight:600}",
   ".dhs-sub{font-size:12px;color:var(--dsw-alias-label-secondary,inherit)}",
@@ -411,7 +590,9 @@ const STYLES = [
   ".dhs-textarea{min-height:56px;resize:vertical;font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace)}",
   ".dhs-check{display:flex;align-items:center;gap:6px}",
   ".dhs-readonly{margin:0;padding:6px 8px;background:var(--dsw-alias-bg-layer-2,transparent);border:1px solid var(--dsw-alias-border-l1,currentColor);border-radius:6px;font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;color:var(--dsw-alias-label-secondary,inherit)}",
-  ".dhs-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-top:1px solid var(--dsw-alias-border-l1,currentColor);padding-top:10px;position:sticky;bottom:0;background:var(--dsw-alias-bg-base,transparent)}",
+  // An OPAQUE bar: this is sticky, so the row it covers must not show through it. A theme token
+  // with a solid fallback, because the plain `transparent` fallback is what let text bleed through.
+  ".dhs-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-top:1px solid var(--dsw-alias-border-l1,currentColor);padding:10px 0 6px;position:sticky;bottom:0;background:var(--dsw-alias-bg-base,#17171a)}",
   ".dhs-btn{font:inherit;font-size:12px;padding:5px 14px;border-radius:6px;cursor:pointer;border:1px solid var(--dsw-alias-border-l2,currentColor);background:transparent;color:var(--dsw-alias-label-primary,inherit)}",
   ".dhs-btn:disabled{opacity:.45;cursor:not-allowed}",
   ".dhs-btn-primary{background:var(--dsw-alias-brand-primary,#3b6fd4);color:var(--dsw-alias-label-primary-foreground,#fff);border-color:transparent}",
@@ -458,6 +639,27 @@ function useServiceState(store: ServiceStore): ServiceState {
   return state;
 }
 
+/**
+ * Subscribe to the active language, so a live switch re-renders this page.
+ *
+ * The bridge's snapshot is a fresh object each call, so the hook re-reads it on every notification
+ * instead of comparing identities. With no locale service (the smoke test) the subscription is a
+ * no-op and the page renders once, in English, from the built-in dictionaries.
+ */
+function useLocaleCopy(bridge: LocaleBridge): {
+  readonly t: Translate;
+  readonly lang: ActiveLanguage;
+} {
+  const [snapshot, setSnapshot] = React.useState(() => bridge.getSnapshot());
+  React.useEffect(() => {
+    setSnapshot(bridge.getSnapshot());
+    return bridge.subscribe(() => setSnapshot(bridge.getSnapshot()));
+  }, [bridge]);
+  // One stable object per language: `t` already keeps a stable identity per namespace, so memoizing
+  // here keeps the tab list (and every other memo that takes the copy) from recomputing per render.
+  return React.useMemo(() => ({ t: snapshot.t, lang: snapshot.lang }), [snapshot.t, snapshot.lang]);
+}
+
 type NoticeKind = "ok" | "err" | "info";
 
 interface Notice {
@@ -465,14 +667,9 @@ interface Notice {
   readonly text: string;
 }
 
-/**
- * Bind the page to one store.
- *
- * The gate is a separate component so the hooks below it are unconditional: `<HindsightSettingsPage>`
- * runs a single hook and then either explains itself or mounts `<SettingsForm>`.
- */
 /** The bank-resolution help, from the upstream README's Bank resolution section. */
-function BanksHelp(): React.ReactElement {
+function BanksHelp(props: { readonly t: Translate }): React.ReactElement {
+  const { t } = props;
   const [open, setOpen] = React.useState(false);
   return React.createElement(
     "div",
@@ -484,7 +681,7 @@ function BanksHelp(): React.ReactElement {
         className: "dhs-help-toggle",
         onClick: () => setOpen((previous) => !previous),
       },
-      open ? "收起「bank 是怎么解析的」" : "不知道怎么设置？bank 是怎么解析的（展开说明）"
+      open ? t("help.toggleOpen") : t("help.toggleClosed")
     ),
     open
       ? React.createElement(
@@ -493,14 +690,10 @@ function BanksHelp(): React.ReactElement {
           BANKS_HELP.map((section) =>
             React.createElement(
               "div",
-              { className: "dhs-help-section", key: section.title },
-              React.createElement("div", { className: "dhs-help-title" }, section.title),
-              section.lines.map((line, index) =>
-                React.createElement(
-                  "div",
-                  { className: "dhs-help-line", key: `${section.title}-${index}` },
-                  line
-                )
+              { className: "dhs-help-section", key: section.titleKey },
+              React.createElement("div", { className: "dhs-help-title" }, t(section.titleKey)),
+              section.lineKeys.map((lineKey) =>
+                React.createElement("div", { className: "dhs-help-line", key: lineKey }, t(lineKey))
               )
             )
           )
@@ -509,17 +702,33 @@ function BanksHelp(): React.ReactElement {
   );
 }
 
+/**
+ * Bind the page to one store.
+ *
+ * The gate is a separate component so the hooks below it are unconditional: `<HindsightSettingsPage>`
+ * runs a single hook and then either explains itself or mounts `<SettingsForm>`.
+ */
 function createPage(
   store: ServiceStore,
-  report: (message: string) => void
-): () => React.ReactElement {
-  return function HindsightSettingsPage(): React.ReactElement {
+  report: (message: string) => void,
+  bridge: LocaleBridge
+): (props: unknown) => React.ReactElement {
+  return function HindsightSettingsPage(props: unknown): React.ReactElement {
+    const seat =
+      isRecord(props) && typeof props.t === "function" ? (props.t as Translate) : undefined;
+    const followed = useLocaleCopy(bridge);
+    // The framework seat (declared namespace) when the shell rendered this entry; the namespace-bound
+    // function otherwise, which is what a composition without a renderer — and this plugin's own
+    // smoke test — reaches for.
+    const copy = seat === undefined ? followed : { t: seat, lang: followed.lang };
+    const t = copy.t;
+
     ensureStyles();
     const entered = React.useRef(false);
     if (!entered.current) {
       // Once per mount: a line per render would flood the trail the moment a user clicks a tab.
       entered.current = true;
-      report("render: entered");
+      report(`render: entered locale=${copy.lang}`);
     }
     const state = useServiceState(store);
 
@@ -530,17 +739,17 @@ function createPage(
         React.createElement(
           "div",
           { className: "dhs-head" },
-          React.createElement("span", { className: "dhs-title" }, PAGE_LABEL)
+          React.createElement("span", { className: "dhs-title" }, pageLabel(t))
         ),
         React.createElement(
           "div",
           { className: state.kind === "loading" ? "dhs-note" : "dhs-note dhs-warn" },
-          state.kind === "loading" ? LOADING_TEXT : state.reason
+          describeAvailability({ state, view: undefined, loadError: undefined, copy })
         )
       );
     }
 
-    return React.createElement(SettingsForm, { service: state.service, report });
+    return React.createElement(SettingsForm, { service: state.service, report, copy });
   };
 }
 
@@ -548,7 +757,7 @@ function createPage(
 // One scope's form state (top level, or one banks.<id> section)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** How a field's source is worded: the top level says "文件", a bank says "本 bank". */
+/** How a field's source is worded: the top level says "file", a bank says "this bank". */
 type ScopeKind = "top" | "bank";
 
 /**
@@ -598,17 +807,27 @@ function useScopeForm(
   service: RemoteNamespace,
   scope: ConfigScope | undefined,
   report: (message: string) => void,
+  copy: { readonly t: Translate; readonly lang: ActiveLanguage },
   onSaved: (() => void) | undefined
 ): ScopeForm {
   const [view, setView] = React.useState<SettingsView | undefined>(undefined);
-  const [loadError, setLoadError] = React.useState<string | undefined>(undefined);
+  /**
+   * A failed read, kept as a copy REQUEST (key + params) rather than a finished sentence: this line
+   * stays on screen while the user changes the language, so it must be rendered from the dictionary
+   * in force at render time. A page re-render is what follows a switch, so it re-words itself.
+   */
+  const [loadError, setLoadError] = React.useState<
+    { readonly key: CopyKey; readonly params?: CopyParams } | undefined
+  >(undefined);
   const [draft, setDraft] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState<"save" | "reload" | undefined>(undefined);
   /** Fields the user explicitly cleared; a redacted secret has no loaded value to differ from. */
   const [cleared, setCleared] = React.useState<ReadonlySet<string>>(() => new Set());
+  /** A transient confirmation: rendered in the language active when the action was taken. */
   const [notice, setNotice] = React.useState<Notice | null>(null);
 
   const label = scopeKey(scope);
+  const { t, lang } = copy;
 
   const reload = React.useCallback(async (): Promise<void> => {
     setBusy("reload");
@@ -616,7 +835,7 @@ function useScopeForm(
       const result = await service.describe(scope ?? TOP_SCOPE);
       if (result.ok) {
         if (!isSettingsView(result.value)) {
-          setLoadError("宿主返回的设置数据格式无法识别（缺少 path / fields）。");
+          setLoadError({ key: "errors.badFormat" });
           return;
         }
         setView(result.value);
@@ -634,28 +853,39 @@ function useScopeForm(
         );
         setLoadError(undefined);
       } else {
-        setLoadError(`读取配置失败：${remoteErrorText(result.error)}`);
+        setLoadError({
+          key: "errors.readFailed",
+          params: { message: remoteErrorText(result.error) },
+        });
       }
     } catch (error) {
       // An assembly fault still rejects, unlike a carrier failure.
-      setLoadError(`读取配置失败：${remoteErrorText(error)}`);
+      setLoadError({
+        key: "errors.readFailed",
+        params: { message: remoteErrorText(error) },
+      });
     } finally {
       setBusy(undefined);
     }
-  }, [service, scope, label, report]);
+  }, [service, scope, label, report, t]);
 
   React.useEffect(() => {
     void reload();
   }, [reload]);
 
-  const availability = describeAvailability({ state: { kind: "ready", service }, view, loadError });
+  const availability = describeAvailability({
+    state: { kind: "ready", service },
+    view,
+    loadError: loadError === undefined ? undefined : t(loadError.key, loadError.params),
+    copy,
+  });
 
   const diff = React.useMemo(
     () =>
       view === undefined
         ? { patch: {}, errors: [], changed: [] }
-        : diffDraft(view.fields, draft, cleared),
-    [view, draft, cleared]
+        : diffDraft(view.fields, draft, t, cleared),
+    [view, draft, cleared, t]
   );
   const dirty = diff.changed.length > 0;
   const invalid = diff.errors.length > 0;
@@ -683,14 +913,15 @@ function useScopeForm(
     if (diff.errors.length > 0) {
       setNotice({
         kind: "err",
-        text: `有 ${diff.errors.length} 个字段不合法，未提交：${diff.errors
-          .map((entry) => entry.message)
-          .join(" ")}`,
+        text: t("errors.invalidFields", {
+          count: diff.errors.length,
+          messages: diff.errors.map((entry) => entry.message).join(" "),
+        }),
       });
       return;
     }
     if (diff.changed.length === 0) {
-      setNotice({ kind: "info", text: "没有需要保存的改动。" });
+      setNotice({ kind: "info", text: t("notices.nothingToSave") });
       return;
     }
     setBusy("save");
@@ -703,25 +934,33 @@ function useScopeForm(
             ? await service.apply(patch)
             : await service.applyScoped(scope, patch);
         if (result.ok) {
-          setNotice({ kind: "ok", text: summarizeApply(patch, result.value) });
+          // The host's own answer decides the wording; the page never re-derives what "should" have
+          // happened from the patch it sent.
+          setNotice({ kind: "ok", text: summarizeApply(patch, result.value, t) });
           if (onSaved !== undefined) onSaved();
         } else {
-          setNotice({ kind: "err", text: `保存失败：${remoteErrorText(result.error)}` });
+          setNotice({
+            kind: "err",
+            text: t("errors.saveFailed", { message: remoteErrorText(result.error) }),
+          });
         }
       } catch (error) {
-        setNotice({ kind: "err", text: `保存失败：${remoteErrorText(error)}` });
+        setNotice({
+          kind: "err",
+          text: t("errors.saveFailed", { message: remoteErrorText(error) }),
+        });
       } finally {
         setBusy(undefined);
         await reload();
       }
     })();
-  }, [view, diff, service, scope, reload, onSaved]);
+  }, [view, diff, service, scope, reload, onSaved, t]);
 
   const discard = React.useCallback((): void => {
     if (view !== undefined) setDraft(draftFromFields(view.fields));
     setCleared(new Set());
-    setNotice({ kind: "info", text: "已丢弃未保存的改动。" });
-  }, [view]);
+    setNotice({ kind: "info", text: t("notices.discarded") });
+  }, [view, t]);
 
   const reloadNow = React.useCallback((): void => {
     void reload();
@@ -749,18 +988,25 @@ function useScopeForm(
 // The top-level form: header + tabs + the always-visible action bar
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+interface Copy {
+  readonly t: Translate;
+  readonly lang: ActiveLanguage;
+}
+
 interface SettingsFormProps {
   readonly service: RemoteNamespace;
   readonly report: (message: string) => void;
+  readonly copy: Copy;
 }
 
 function SettingsForm(props: SettingsFormProps): React.ReactElement {
-  const { service, report } = props;
-  const form = useScopeForm(service, undefined, report, undefined);
+  const { service, report, copy } = props;
+  const { t, lang } = copy;
+  const form = useScopeForm(service, undefined, report, copy, undefined);
   // Empty means "no explicit choice yet": the fallback below resolves it to the FIRST group tab.
   const [activeTab, setActiveTab] = React.useState<string>("");
 
-  const tabs = React.useMemo(() => buildTabs(form.view?.fields ?? []), [form.view]);
+  const tabs = React.useMemo(() => buildTabs(form.view?.fields ?? [], copy), [form.view, copy]);
   // Default to the first group tab; an unknown active id (a view that lost a group) falls back too.
   const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
   const groupCount = tabs.filter((tab) => tab.kind === "group").length;
@@ -772,23 +1018,23 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
     React.createElement(
       "div",
       { className: "dhs-head" },
-      React.createElement("span", { className: "dhs-title" }, PAGE_LABEL),
+      React.createElement("span", { className: "dhs-title" }, pageLabel(t)),
       React.createElement(
         "span",
         { className: "dhs-sub" },
         form.view === undefined
-          ? LOADING_TEXT
-          : `${form.view.fields.length} 个配置项 · 分组 ${groupCount} 个`
+          ? t("loading.text")
+          : t("counts.fieldsAndGroups", { count: form.view.fields.length, groups: groupCount })
       )
     ),
     // The path is whatever the host resolved, so this line is correct on every OS.
     React.createElement(
       "div",
       { className: "dhs-note" },
-      "本页直接读写宿主当前使用的配置文件：",
-      React.createElement("code", null, form.view?.path ?? LOADING_TEXT),
+      t("page.fileIntro"),
+      React.createElement("code", null, form.view?.path ?? t("loading.text")),
       React.createElement("br", null),
-      "留空并保存＝删除该键，该项随即回退到环境变量，再回退到插件默认值。"
+      t("page.blankHint")
     ),
     form.availability === undefined
       ? null
@@ -820,18 +1066,29 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
           ? React.createElement(BanksPanel, {
               service,
               report,
+              copy,
               members: form.view?.banks ?? [],
               paths: form.view?.paths ?? [],
               onChanged: form.reload,
             })
-          : renderGroup(active, form, disabled)
+          : renderGroup(active, form, disabled, copy)
     ),
-    React.createElement(ActionBar, { form, saveLabel: "保存" })
+    React.createElement(ActionBar, {
+      form,
+      copy,
+      saveLabel: t("actions.save"),
+    })
   );
 }
 
 /** One group tab's body: the heading, then that group's field rows only. */
-function renderGroup(tab: PageTab, form: ScopeForm, disabled: boolean): React.ReactElement {
+function renderGroup(
+  tab: PageTab,
+  form: ScopeForm,
+  disabled: boolean,
+  copy: Copy
+): React.ReactElement {
+  const { t } = copy;
   return React.createElement(
     "div",
     { className: "dhs-group" },
@@ -842,10 +1099,11 @@ function renderGroup(tab: PageTab, form: ScopeForm, disabled: boolean): React.Re
       React.createElement("span", { className: "dhs-sub" }, tab.summary)
     ),
     tab.fields.length === 0
-      ? React.createElement("div", { className: "dhs-meta" }, "本组暂无配置项。")
+      ? React.createElement("div", { className: "dhs-meta" }, t("group.empty"))
       : React.createElement(FieldRows, {
           fields: tab.fields,
           form,
+          copy,
           scopeKind: "top",
           disabled,
         })
@@ -853,12 +1111,13 @@ function renderGroup(tab: PageTab, form: ScopeForm, disabled: boolean): React.Re
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// The 按项目（banks） tab
+// The banks tab
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 interface BanksPanelProps {
   readonly service: RemoteNamespace;
   readonly report: (message: string) => void;
+  readonly copy: Copy;
   readonly members: readonly ScopeMember[];
   readonly paths: readonly ScopeMember[];
   readonly onChanged: () => void;
@@ -871,21 +1130,24 @@ interface BanksPanelProps {
  * a newly typed id is not in it yet and is labelled as a new section until it is saved.
  */
 function BanksPanel(props: BanksPanelProps): React.ReactElement {
-  const { service, report, members, paths, onChanged } = props;
+  const { service, report, copy, members, paths, onChanged } = props;
+  const { t } = copy;
   const [openId, setOpenId] = React.useState<string | undefined>(undefined);
   const [newId, setNewId] = React.useState("");
-  const [addError, setAddError] = React.useState<string | undefined>(undefined);
+  const [addError, setAddError] = React.useState<
+    { readonly key: CopyKey; readonly params?: CopyParams } | undefined
+  >(undefined);
 
   const open = members.find((member) => member.id === openId);
 
   const onAdd = (): void => {
     const candidate = newId.trim();
     if (candidate === "") {
-      setAddError("请输入 bank id（不能为空）。");
+      setAddError({ key: "banks.addEmpty" });
       return;
     }
     if (members.some((member) => member.id === candidate)) {
-      setAddError(`banks.${candidate} 已经存在，请直接从上面的列表打开。`);
+      setAddError({ key: "banks.addExists", params: { id: candidate } });
       return;
     }
     setAddError(undefined);
@@ -896,16 +1158,20 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
   return React.createElement(
     "div",
     { className: "dhs-scope" },
-    React.createElement("div", { className: "dhs-note" }, banksScopeText()),
-    React.createElement(BanksHelp),
+    React.createElement("div", { className: "dhs-note" }, banksScopeText(t)),
+    React.createElement(BanksHelp, { t }),
     React.createElement(
       "div",
       { className: "dhs-subhead" },
-      React.createElement("span", { className: "dhs-subhead-title" }, "已有 bank"),
-      React.createElement("span", { className: "dhs-chip" }, `${members.length} 个`)
+      React.createElement("span", { className: "dhs-subhead-title" }, t("banks.title")),
+      React.createElement(
+        "span",
+        { className: "dhs-chip" },
+        t("banks.count", { count: members.length })
+      )
     ),
     members.length === 0
-      ? React.createElement("div", { className: "dhs-meta" }, "文件里还没有 banks 段落。")
+      ? React.createElement("div", { className: "dhs-meta" }, t("banks.empty"))
       : React.createElement(
           React.Fragment,
           null,
@@ -920,7 +1186,7 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
                 React.createElement(
                   "span",
                   { className: "dhs-chip" },
-                  `${member.keys.length} 个键`
+                  t("banks.keysCount", { count: member.keys.length })
                 ),
                 React.createElement(
                   "button",
@@ -929,7 +1195,7 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
                     className: "dhs-btn dhs-btn-mini",
                     onClick: () => setOpenId(openId === member.id ? undefined : member.id),
                   },
-                  openId === member.id ? "收起" : "打开"
+                  openId === member.id ? t("banks.close") : t("banks.open")
                 )
               ),
               member.keys.length === 0
@@ -937,7 +1203,7 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
                 : React.createElement(
                     "div",
                     { className: "dhs-meta" },
-                    `已设置：${member.keys.join("、")}`
+                    t("banks.keysSet", { keys: member.keys.join(t("banks.keySeparator")) })
                   )
             )
           )
@@ -950,8 +1216,8 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
         type: "text",
         value: newId,
         spellCheck: false,
-        placeholder: "新增 bank id，例如 coding-agent::my-repo",
-        "aria-label": "新增 bank id",
+        placeholder: t("banks.newPlaceholder"),
+        "aria-label": t("banks.newAria"),
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
           setNewId(event.target.value);
           setAddError(undefined);
@@ -960,12 +1226,16 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
       React.createElement(
         "button",
         { type: "button", className: "dhs-btn dhs-btn-mini", onClick: onAdd },
-        "新增"
+        t("banks.add")
       )
     ),
     addError === undefined
       ? null
-      : React.createElement("div", { className: "dhs-meta dhs-err" }, addError),
+      : React.createElement(
+          "div",
+          { className: "dhs-meta dhs-err" },
+          t(addError.key, addError.params)
+        ),
     openId === undefined
       ? null
       : React.createElement(
@@ -974,10 +1244,18 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
           React.createElement(
             "div",
             { className: "dhs-subhead" },
-            React.createElement("span", { className: "dhs-subhead-title" }, `编辑 banks.${openId}`),
+            React.createElement(
+              "span",
+              { className: "dhs-subhead-title" },
+              t("banks.editTitle", { id: openId })
+            ),
             open === undefined
-              ? React.createElement("span", { className: "dhs-chip" }, "新段落")
-              : React.createElement("span", { className: "dhs-chip" }, `${open.keys.length} 个键`),
+              ? React.createElement("span", { className: "dhs-chip" }, t("banks.newSection"))
+              : React.createElement(
+                  "span",
+                  { className: "dhs-chip" },
+                  t("banks.keysCount", { count: open.keys.length })
+                ),
             React.createElement(
               "button",
               {
@@ -985,20 +1263,17 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
                 className: "dhs-btn dhs-btn-mini",
                 onClick: () => setOpenId(undefined),
               },
-              "关闭"
+              t("banks.closeEditor")
             )
           ),
           open === undefined
-            ? React.createElement(
-                "div",
-                { className: "dhs-meta" },
-                "保存后才会在文件里创建这一段。"
-              )
+            ? React.createElement("div", { className: "dhs-meta" }, t("banks.newSectionNote"))
             : null,
           React.createElement(ScopedEditor, {
             key: openId,
             service,
             report,
+            copy,
             bankId: openId,
             onSaved: onChanged,
           })
@@ -1011,16 +1286,25 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
           React.createElement(
             "div",
             { className: "dhs-subhead" },
-            React.createElement("span", { className: "dhs-subhead-title" }, "按路径（paths）"),
-            React.createElement("span", { className: "dhs-chip dhs-chip-ro" }, "只读")
+            React.createElement("span", { className: "dhs-subhead-title" }, t("banks.pathsTitle")),
+            React.createElement(
+              "span",
+              { className: "dhs-chip dhs-chip-ro" },
+              t("banks.pathsReadOnlyChip")
+            )
           ),
-          React.createElement("div", { className: "dhs-meta" }, pathsReadOnlyText()),
+          React.createElement("div", { className: "dhs-meta" }, pathsReadOnlyText(t)),
           ...paths.map((member) =>
             React.createElement(
               "div",
               { className: "dhs-meta", key: member.id },
               React.createElement("code", { className: "dhs-key" }, `paths.${member.id}`),
-              ` · ${member.keys.length} 个键${member.keys.length === 0 ? "" : `：${member.keys.join("、")}`}`
+              member.keys.length === 0
+                ? t("banks.pathKeysSuffix", { count: member.keys.length })
+                : t("banks.pathKeysList", {
+                    count: member.keys.length,
+                    keys: member.keys.join(t("banks.keySeparator")),
+                  })
             )
           )
         )
@@ -1030,6 +1314,7 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
 interface ScopedEditorProps {
   readonly service: RemoteNamespace;
   readonly report: (message: string) => void;
+  readonly copy: Copy;
   readonly bankId: string;
   readonly onSaved?: () => void;
 }
@@ -1041,9 +1326,10 @@ interface ScopedEditorProps {
  * back to the top level, which is what the explanation above the form says.
  */
 function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
-  const { service, report, bankId, onSaved } = props;
+  const { service, report, copy, bankId, onSaved } = props;
+  const { t } = copy;
   const scope = React.useMemo<ConfigScope>(() => ({ kind: "bank", id: bankId }), [bankId]);
-  const form = useScopeForm(service, scope, report, onSaved);
+  const form = useScopeForm(service, scope, report, copy, onSaved);
   const fields = form.view?.fields ?? [];
   const disabled = !form.editable || form.busy !== undefined;
 
@@ -1053,21 +1339,25 @@ function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
     React.createElement(
       "div",
       { className: "dhs-scope-head" },
-      React.createElement("span", { className: "dhs-subhead-title" }, scopedEditorTitle(scope)),
+      React.createElement("span", { className: "dhs-subhead-title" }, scopedEditorTitle(scope, t)),
       React.createElement(
         "span",
         { className: "dhs-sub" },
         form.view === undefined
-          ? LOADING_TEXT
-          : `${fields.length} 个配置项 · 文件：${form.view.path}`
+          ? t("loading.text")
+          : t("editor.countAndPath", { count: fields.length, path: form.view.path })
       )
     ),
-    React.createElement("div", { className: "dhs-note" }, banksScopeText()),
+    React.createElement("div", { className: "dhs-note" }, banksScopeText(t)),
     form.availability === undefined
       ? null
       : React.createElement("div", { className: "dhs-note dhs-warn" }, form.availability),
-    React.createElement(FieldRows, { fields, form, scopeKind: "bank", disabled }),
-    React.createElement(ActionBar, { form, saveLabel: `保存到 banks.${bankId}` })
+    React.createElement(FieldRows, { fields, form, copy, scopeKind: "bank", disabled }),
+    React.createElement(ActionBar, {
+      form,
+      copy,
+      saveLabel: t("actions.saveTo", { id: bankId }),
+    })
   );
 }
 
@@ -1078,12 +1368,13 @@ function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
 interface FieldRowsProps {
   readonly fields: readonly SettingsFieldView[];
   readonly form: ScopeForm;
+  readonly copy: Copy;
   readonly scopeKind: ScopeKind;
   readonly disabled: boolean;
 }
 
 function FieldRows(props: FieldRowsProps): React.ReactElement {
-  const { fields, form, scopeKind, disabled } = props;
+  const { fields, form, copy, scopeKind, disabled } = props;
   return React.createElement(
     React.Fragment,
     null,
@@ -1091,6 +1382,7 @@ function FieldRows(props: FieldRowsProps): React.ReactElement {
       React.createElement(FieldRow, {
         key: field.key,
         field,
+        copy,
         draft: form.draft[field.key] ?? "",
         disabled,
         scopeKind,
@@ -1103,13 +1395,15 @@ function FieldRows(props: FieldRowsProps): React.ReactElement {
 
 interface ActionBarProps {
   readonly form: ScopeForm;
+  readonly copy: Copy;
   /** The save button's base label; the change count is appended when the form is dirty. */
   readonly saveLabel: string;
 }
 
 /** Save / discard / reload plus the validation and notice lines, rendered for one scope. */
 function ActionBar(props: ActionBarProps): React.ReactElement {
-  const { form, saveLabel } = props;
+  const { form, copy, saveLabel } = props;
+  const { t } = copy;
   const { diff, busy, editable } = form;
   const disabled = !editable || busy !== undefined;
   return React.createElement(
@@ -1125,28 +1419,29 @@ function ActionBar(props: ActionBarProps): React.ReactElement {
         onClick: form.save,
       },
       busy === "save"
-        ? "保存中…"
+        ? t("actions.saving")
         : form.dirty
-          ? `${saveLabel}（${diff.changed.length} 项）`
+          ? t("actions.saveCount", { label: saveLabel, count: diff.changed.length })
           : saveLabel
     ),
     React.createElement(
       "button",
       { type: "button", className: "dhs-btn", disabled: busy !== undefined, onClick: form.discard },
-      "撤销修改"
+      t("actions.discard")
     ),
     React.createElement(
       "button",
       { type: "button", className: "dhs-btn", disabled: busy !== undefined, onClick: form.reload },
-      busy === "reload" ? "重新读取中…" : "重新读取"
+      busy === "reload" ? t("actions.reloading") : t("actions.reload")
     ),
     form.invalid
       ? React.createElement(
           "span",
           { className: "dhs-hint dhs-err", "data-validation": "errors" },
-          `有 ${diff.errors.length} 个字段不合法，不会提交：${diff.errors
-            .map((entry) => entry.message)
-            .join(" ")}`
+          t("errors.invalidFieldsShort", {
+            count: diff.errors.length,
+            messages: diff.errors.map((entry) => entry.message).join(" "),
+          })
         )
       : null,
     form.notice === null
@@ -1173,6 +1468,7 @@ function noticeClass(notice: Notice): string {
 
 interface FieldRowProps {
   readonly field: SettingsFieldView;
+  readonly copy: Copy;
   readonly draft: string;
   readonly disabled: boolean;
   readonly scopeKind: ScopeKind;
@@ -1181,7 +1477,8 @@ interface FieldRowProps {
 }
 
 function FieldRow(props: FieldRowProps): React.ReactElement {
-  const { field, draft, disabled, scopeKind, onDraft, onClear } = props;
+  const { field, copy, draft, disabled, scopeKind, onDraft, onClear } = props;
+  const { t, lang } = copy;
 
   const onChange = (
     event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -1194,7 +1491,7 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
       return React.createElement(
         "pre",
         { className: "dhs-readonly" },
-        formatFieldValue(field, field.inFile ? field.value : null)
+        formatFieldValue(field, field.inFile ? field.value : null, t)
       );
     }
     switch (field.kind) {
@@ -1213,12 +1510,12 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
           React.createElement(
             "span",
             { className: "dhs-hint" },
-            valueSourceNote(field, scopeKind) ?? fallbackText(field)
+            valueSourceNote(field, copy, scopeKind) ?? fallbackText(field, copy)
           )
         );
       case "enum": {
         const options: Array<{ readonly value: string; readonly label: string }> = [
-          { value: "", label: `未设置（默认 ${formatDefault(field)}）` },
+          { value: "", label: t("unset.optionPrefix", { value: formatDefault(field, t) }) },
         ];
         for (const entry of field.values ?? []) options.push({ value: entry, label: entry });
         return React.createElement(
@@ -1252,7 +1549,7 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
           "aria-label": field.key,
           // The host never sends a secret's value, so an in-file secret is an EMPTY box that is
           // nevertheless set. The placeholder is the only place that distinction can live.
-          ...(field.inFile ? { placeholder: "已设置（不显示明文）· 留空＝不改动" } : {}),
+          ...(field.inFile ? { placeholder: t("field.placeholder.secretSet") } : {}),
         });
       case "stringList":
         return React.createElement("textarea", {
@@ -1261,7 +1558,7 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
           disabled,
           onChange,
           spellCheck: false,
-          placeholder: "一行一个；也接受逗号分隔",
+          placeholder: t("field.placeholder.list"),
           "aria-label": field.key,
         });
       case "json":
@@ -1289,23 +1586,27 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
     React.createElement(
       "span",
       { className: field.editable ? "dhs-chip" : "dhs-chip dhs-chip-ro", key: "rw" },
-      field.editable ? "可编辑" : "只读"
+      field.editable ? t("field.chip.editable") : t("field.chip.readOnly")
     ),
     React.createElement("span", { className: "dhs-chip", key: "kind" }, field.kind),
-    React.createElement("span", { className: "dhs-chip", key: "scope" }, scopeLabel(field.scope)),
+    React.createElement(
+      "span",
+      { className: "dhs-chip", key: "scope" },
+      scopeLabel(field.scope, t)
+    ),
     React.createElement(
       "span",
       {
         className: field.inFile ? "dhs-chip dhs-chip-set" : "dhs-chip",
         key: "state",
       },
-      field.inFile ? "文件已设置" : "文件未设置"
+      field.inFile ? t("field.chip.inFile") : t("field.chip.notInFile")
     ),
   ];
 
   // Where the text in the box came from. Only for editable rows: a read-only row renders a `pre`
   // and never shows the prefilled control, so the note would contradict what is on screen.
-  const sourceNote = field.editable ? valueSourceNote(field, scopeKind) : undefined;
+  const sourceNote = field.editable ? valueSourceNote(field, copy, scopeKind) : undefined;
 
   return React.createElement(
     "div",
@@ -1316,7 +1617,7 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
       React.createElement("span", { className: "dhs-key" }, field.key),
       ...chips
     ),
-    React.createElement("div", { className: "dhs-summary" }, field.summary),
+    React.createElement("div", { className: "dhs-summary" }, fieldSummary(field, lang)),
     input,
     // The source of the displayed value, then the fallback chain: a box showing the default must say
     // so, and an empty box must not read as "the value is empty" when an exported variable decides it.
@@ -1325,11 +1626,11 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
       : React.createElement("div", { className: "dhs-meta" }, sourceNote),
     field.inFile
       ? null
-      : React.createElement("div", { className: "dhs-meta" }, fallbackText(field)),
+      : React.createElement("div", { className: "dhs-meta" }, fallbackText(field, copy)),
     field.shadowedByHarness
-      ? React.createElement("div", { className: "dhs-meta" }, shadowText())
+      ? React.createElement("div", { className: "dhs-meta" }, shadowText(t))
       : null,
-    !field.editable ? React.createElement("div", { className: "dhs-meta" }, readOnlyText()) : null,
+    !field.editable ? React.createElement("div", { className: "dhs-meta" }, readOnlyText(t)) : null,
     field.editable
       ? React.createElement(
           "div",
@@ -1346,17 +1647,13 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
             field.inFile
               ? draft === "" && field.kind !== "secret"
                 ? // An empty cell for a value the file stores as "" is still a stored key.
-                  `${UNSET_TEXT}（保存后删除该键）`
-                : // A secret is ALWAYS an empty box while set, so its button always reads 清空.
-                  "清空（保存后删除该键）"
-              : "清空（文件中没有这一项）"
+                  t("field.clearUnsetStored", { value: unsetText(t) })
+                : // A secret is ALWAYS an empty box while set, so its button always reads "clear".
+                  t("field.clearInFile")
+              : t("field.clearNotInFile")
           ),
           field.kind === "secret"
-            ? React.createElement(
-                "span",
-                { className: "dhs-hint" },
-                "密钥不随接口下发：留空＝不改动，输入新值＝覆盖，点「清空」保存后删除该键。"
-              )
+            ? React.createElement("span", { className: "dhs-hint" }, t("field.secretHint"))
             : null
         )
       : null

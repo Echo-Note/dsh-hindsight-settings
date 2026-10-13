@@ -27,6 +27,16 @@ export type FieldGroup =
 /** How a field is rendered and validated. */
 export type FieldKind = "string" | "secret" | "number" | "boolean" | "enum" | "stringList" | "json";
 
+/**
+ * The languages the page can render. Both halves live in this table because the page bundles it and
+ * picks one by `ctx.locale`; the Remote response carries a single string only as a fallback for a
+ * field key the running page does not know.
+ */
+export interface LocalizedText {
+  readonly en: string;
+  readonly zh: string;
+}
+
 /** Where a value may be overridden from. Mirrors upstream's layers. */
 export type FieldScope = "global" | "harness" | "bank" | "path";
 
@@ -48,62 +58,97 @@ export interface ConfigField {
   /** False = the page renders it read-only (see the module doc for why). */
   readonly editable: boolean;
   readonly scope: FieldScope;
-  /** One line for the page. */
-  readonly summary: string;
+  /** One line for the page, in every language the page can render. */
+  readonly summary: LocalizedText;
 }
 
 export interface FieldGroupDescriptor {
   readonly id: FieldGroup;
-  readonly title: string;
-  readonly summary: string;
+  readonly title: LocalizedText;
+  readonly summary: LocalizedText;
 }
 
 export const FIELD_GROUPS: readonly FieldGroupDescriptor[] = [
   {
     id: "connection",
-    title: "连接",
-    summary: "记忆存放在哪里，用什么凭据访问。",
+    title: {
+      en: "Connection",
+      zh: "连接",
+    },
+    summary: {
+      en: "Where memories are stored, and which credential reaches them.",
+      zh: "记忆存放在哪里，用什么凭据访问。",
+    },
   },
   {
     id: "routing",
-    title: "记忆库路由",
-    summary: "这次工作写进哪个 bank；默认每个仓库一个。",
+    title: {
+      en: "Bank routing",
+      zh: "记忆库路由",
+    },
+    summary: {
+      en: "Which bank this work is written into; one per repository by default.",
+      zh: "这次工作写进哪个 bank；默认每个仓库一个。",
+    },
   },
   {
     id: "recall",
-    title: "召回与注入",
-    summary: "每一轮往模型上下文里注入什么、等多久。",
+    title: {
+      en: "Recall and injection",
+      zh: "召回与注入",
+    },
+    summary: {
+      en: "What gets injected into the model's context each turn, and how long it waits.",
+      zh: "每一轮往模型上下文里注入什么、等多久。",
+    },
   },
   {
     id: "pages",
-    title: "知识页",
-    summary: "知识页怎么生成、什么时候刷新。",
+    title: {
+      en: "Knowledge pages",
+      zh: "知识页",
+    },
+    summary: {
+      en: "How knowledge pages are generated, and when they refresh.",
+      zh: "知识页怎么生成、什么时候刷新。",
+    },
   },
   {
     id: "retention",
-    title: "写入与保留",
-    summary: "会话怎么落库、抽取多细、按什么粒度归并。",
+    title: {
+      en: "Writing and retention",
+      zh: "写入与保留",
+    },
+    summary: {
+      en: "How sessions land in the store, how finely they are extracted, and how they are grouped.",
+      zh: "会话怎么落库、抽取多细、按什么粒度归并。",
+    },
   },
   {
     id: "ingest",
-    title: "种子与跟进",
-    summary: "冷启动时从哪里取料，之后怎么保持当前。",
+    title: {
+      en: "Seeding and follow-up",
+      zh: "种子与跟进",
+    },
+    summary: {
+      en: "Where a cold start draws its material from, and how it stays current afterwards.",
+      zh: "冷启动时从哪里取料，之后怎么保持当前。",
+    },
   },
   {
     id: "scope",
-    title: "范围与开关",
-    summary: "哪些项目有记忆，以及排查用的开关。",
+    title: {
+      en: "Scope and switches",
+      zh: "范围与开关",
+    },
+    summary: {
+      en: "Which projects have memory, plus the switches used for troubleshooting.",
+      zh: "哪些项目有记忆，以及排查用的开关。",
+    },
   },
 ];
 
-/**
- * Every field of upstream's `RawConfig`, in page order.
- *
- * `env` is copied from upstream's `ENV_KEYS`; a field without one is file-only (upstream documents
- * the four map-valued settings that way, and this table extends it to every nested value).
- */
 export const CONFIG_FIELDS: readonly ConfigField[] = [
-  // ── connection ────────────────────────────────────────────────────────────────
   {
     key: "serverMode",
     group: "connection",
@@ -113,8 +158,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_SERVER_MODE",
     editable: true,
     scope: "global",
-    summary:
-      "cloud = 官方托管；self-hosted = 你自己的服务器（配合 apiUrl）；daemon = 本机 hindsight-embed 守护进程（apiUrl 被忽略）。",
+    summary: {
+      en: "cloud = the official hosted service; self-hosted = your own server (used with apiUrl); daemon = the local hindsight-embed daemon (apiUrl is ignored).",
+      zh: "cloud = 官方托管；self-hosted = 你自己的服务器（配合 apiUrl）；daemon = 本机 hindsight-embed 守护进程（apiUrl 被忽略）。",
+    },
   },
   {
     key: "apiUrl",
@@ -124,7 +171,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_API_URL",
     editable: true,
     scope: "global",
-    summary: "Hindsight API 地址。自建常见 http://localhost:8888。",
+    summary: {
+      en: "The Hindsight API address. A common self-hosted one is http://localhost:8888.",
+      zh: "Hindsight API 地址。自建常见 http://localhost:8888。",
+    },
   },
   {
     key: "apiToken",
@@ -134,8 +184,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_API_TOKEN",
     editable: true,
     scope: "global",
-    summary:
-      "Hindsight 的承载令牌（自托管＝你服务器要求的 key；Cloud＝账号 key）。它是【服务器/账号级】凭据，不携带用户身份：多人共用一个 key 时，隔离只取决于服务器端是否装了 tenant 扩展（一人一键一 schema），bank 名本身不是安全边界。Cloud 的 key 可按 bank 限定并可程序化创建/撤销。",
+    summary: {
+      en: "Hindsight's bearer token (self-hosted = the key your server requires; Cloud = an account key). It is a server/account-level credential and carries no user identity: when several people share one key, isolation depends only on whether the server has the tenant extension installed (one key per user, one schema each), and the bank name itself is not a security boundary. A Cloud key can be limited per bank and created/revoked programmatically.",
+      zh: "Hindsight 的承载令牌（自托管＝你服务器要求的 key；Cloud＝账号 key）。它是【服务器/账号级】凭据，不携带用户身份：多人共用一个 key 时，隔离只取决于服务器端是否装了 tenant 扩展（一人一键一 schema），bank 名本身不是安全边界。Cloud 的 key 可按 bank 限定并可程序化创建/撤销。",
+    },
   },
   {
     key: "apiPort",
@@ -145,7 +197,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_API_PORT",
     editable: true,
     scope: "global",
-    summary: "daemon 模式监听的端口（不是自建服务器的 8888）。",
+    summary: {
+      en: "The port daemon mode listens on (not 8888, which is the self-hosted server).",
+      zh: "daemon 模式监听的端口（不是自建服务器的 8888）。",
+    },
   },
   {
     key: "daemonIdleTimeout",
@@ -155,7 +210,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_DAEMON_IDLE_TIMEOUT",
     editable: true,
     scope: "global",
-    summary: "daemon 空闲多少秒后退出；不设则永不自动退出。",
+    summary: {
+      en: "How many seconds of idleness before the daemon exits; unset means it never exits on its own.",
+      zh: "daemon 空闲多少秒后退出；不设则永不自动退出。",
+    },
   },
   {
     key: "daemonProfile",
@@ -165,7 +223,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_DAEMON_PROFILE",
     editable: true,
     scope: "global",
-    summary: "daemon 使用哪个 hindsight-embed profile（即哪个本地库）。",
+    summary: {
+      en: "Which hindsight-embed profile the daemon uses (that is, which local store).",
+      zh: "daemon 使用哪个 hindsight-embed profile（即哪个本地库）。",
+    },
   },
   {
     key: "embedVersion",
@@ -175,7 +236,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_EMBED_VERSION",
     editable: true,
     scope: "global",
-    summary: "daemon 通过 uvx 运行哪个 hindsight-embed 版本，默认 latest。",
+    summary: {
+      en: "Which hindsight-embed version the daemon runs through uvx; latest by default.",
+      zh: "daemon 通过 uvx 运行哪个 hindsight-embed 版本，默认 latest。",
+    },
   },
   {
     key: "embedPackagePath",
@@ -185,7 +249,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_EMBED_PACKAGE_PATH",
     editable: true,
     scope: "global",
-    summary: "改用本地 hindsight-embed checkout 而不是发布版（开发用）。",
+    summary: {
+      en: "Use a local hindsight-embed checkout instead of the published version (for development).",
+      zh: "改用本地 hindsight-embed checkout 而不是发布版（开发用）。",
+    },
   },
 
   // ── routing ───────────────────────────────────────────────────────────────────
@@ -197,8 +264,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_BANK_ID",
     editable: true,
     scope: "bank",
-    summary:
-      "固定使用这个 bank。解析顺序：mapPathToBank → 本项 → bankIdTemplate；设了它就不再按仓库动态分库，除非 dynamicBankId 为 true。",
+    summary: {
+      en: "Pin this bank. Resolution order: mapPathToBank → this setting → bankIdTemplate; once it is set, banks are no longer resolved dynamically per repository, unless dynamicBankId is true.",
+      zh: "固定使用这个 bank。解析顺序：mapPathToBank → 本项 → bankIdTemplate；设了它就不再按仓库动态分库，除非 dynamicBankId 为 true。",
+    },
   },
   {
     key: "dynamicBankId",
@@ -208,8 +277,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_DYNAMIC_BANK_ID",
     editable: true,
     scope: "bank",
-    summary:
-      "默认在未设 bankId 时动态解析。设 true＝即使设了 bankId 也按仓库动态分库；设 false＝强制静态，始终用 bankId。",
+    summary: {
+      en: "By default it resolves dynamically when bankId is unset. true = resolve dynamically per repository even when bankId is set; false = force static, always using bankId.",
+      zh: "默认在未设 bankId 时动态解析。设 true＝即使设了 bankId 也按仓库动态分库；设 false＝强制静态，始终用 bankId。",
+    },
   },
   {
     key: "bankIdTemplate",
@@ -219,8 +290,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_BANK_ID_TEMPLATE",
     editable: true,
     scope: "bank",
-    summary:
-      "动态 bank id 的模板，默认 coding-agent::{gitProject}（各 agent 共享同一个仓库 bank）。占位符：{gitProject}＝worktree 感知的仓库名（同一仓库的所有 worktree 共享；不在仓库中时取会话启动目录名）、{project}＝当前目录名、{harness}、{channel}、{user}。想按 agent 分开就写 {harness}-{gitProject}。",
+    summary: {
+      en: "Template for the dynamic bank id; the default is coding-agent::{gitProject} (every agent shares one bank per repository). Placeholders: {gitProject} = the worktree-aware repository name (shared by every worktree of one repository; outside a repository, the name of the directory the session started in), {project} = the current directory name, {harness}, {channel}, {user}. To split per agent, write {harness}-{gitProject}.",
+      zh: "动态 bank id 的模板，默认 coding-agent::{gitProject}（各 agent 共享同一个仓库 bank）。占位符：{gitProject}＝worktree 感知的仓库名（同一仓库的所有 worktree 共享；不在仓库中时取会话启动目录名）、{project}＝当前目录名、{harness}、{channel}、{user}。想按 agent 分开就写 {harness}-{gitProject}。",
+    },
   },
   {
     key: "mapPathToBank",
@@ -229,8 +302,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "path",
-    summary:
-      "绝对路径 → bank 名；最长前缀生效，优先级最高（可盖过 bankId），linked worktree 继承主检出的映射。键值映射，仅文件可编辑。",
+    summary: {
+      en: "Absolute path → bank name; the longest prefix wins and it takes highest priority (it can override bankId); linked worktrees inherit the main checkout's mapping. A key→value map, editable only in the config file.",
+      zh: "绝对路径 → bank 名；最长前缀生效，优先级最高（可盖过 bankId），linked worktree 继承主检出的映射。键值映射，仅文件可编辑。",
+    },
   },
   {
     key: "resolveWorktrees",
@@ -240,7 +315,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_RESOLVE_WORKTREES",
     editable: true,
     scope: "bank",
-    summary: "git worktree 共用主仓库的 bank（默认开）。",
+    summary: {
+      en: "git worktrees share the main repository's bank (on by default).",
+      zh: "git worktree 共用主仓库的 bank（默认开）。",
+    },
   },
 
   // ── recall ────────────────────────────────────────────────────────────────────
@@ -253,7 +331,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_AUTO_INJECT",
     editable: true,
     scope: "harness",
-    summary: "首轮注入什么：reflect 合成 / 知识页检索 / 记忆召回 / 不注入。",
+    summary: {
+      en: "What to inject on the first turn: reflect synthesis / knowledge-page search / memory recall / nothing.",
+      zh: "首轮注入什么：reflect 合成 / 知识页检索 / 记忆召回 / 不注入。",
+    },
   },
   {
     key: "autoReflect",
@@ -263,7 +344,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_AUTO_REFLECT",
     editable: false,
     scope: "harness",
-    summary: "已废弃，改用 autoInject；仅在未设 autoInject 时兼容生效。",
+    summary: {
+      en: "Deprecated, use autoInject; it still applies for compatibility, but only when autoInject is unset.",
+      zh: "已废弃，改用 autoInject；仅在未设 autoInject 时兼容生效。",
+    },
   },
   {
     key: "reflectBudget",
@@ -274,7 +358,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_REFLECT_BUDGET",
     editable: true,
     scope: "harness",
-    summary: "hindsight_reflect 工具的合成预算；大库上高预算可能撞服务端墙钟超时。",
+    summary: {
+      en: "The synthesis budget of the hindsight_reflect tool; a high budget on a large bank can hit the server's wall-clock timeout.",
+      zh: "hindsight_reflect 工具的合成预算；大库上高预算可能撞服务端墙钟超时。",
+    },
   },
   {
     key: "reflectTimeoutMs",
@@ -284,7 +371,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_REFLECT_TIMEOUT_MS",
     editable: true,
     scope: "harness",
-    summary: "自动会话 reflect 的超时（毫秒），要放进宿主的钩子窗口。",
+    summary: {
+      en: "Timeout for the automatic session reflect (milliseconds); it has to fit inside the host's hook window.",
+      zh: "自动会话 reflect 的超时（毫秒），要放进宿主的钩子窗口。",
+    },
   },
   {
     key: "reflectToolTimeoutMs",
@@ -294,7 +384,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_REFLECT_TOOL_TIMEOUT_MS",
     editable: true,
     scope: "harness",
-    summary: "hindsight_reflect 工具本身的超时，刻意远大于自动 reflect。",
+    summary: {
+      en: "Timeout of the hindsight_reflect tool itself, deliberately far larger than the automatic reflect.",
+      zh: "hindsight_reflect 工具本身的超时，刻意远大于自动 reflect。",
+    },
   },
   {
     key: "injectTimeoutMs",
@@ -304,7 +397,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_INJECT_TIMEOUT_MS",
     editable: true,
     scope: "harness",
-    summary: "knowledge pages / recall 注入的检索超时，也是 reflect 失败后的回退预算。",
+    summary: {
+      en: "Retrieval timeout for knowledge pages / recall injection; it is also the fallback budget after a reflect failure.",
+      zh: "knowledge pages / recall 注入的检索超时，也是 reflect 失败后的回退预算。",
+    },
   },
   {
     key: "pageSearchLimit",
@@ -314,7 +410,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_PAGE_SEARCH_LIMIT",
     editable: true,
     scope: "harness",
-    summary: "一次知识页检索返回几页；注入、回退与工具共用同一个限制。",
+    summary: {
+      en: "How many pages one knowledge-page search returns; injection, the fallback and the tool share the same limit.",
+      zh: "一次知识页检索返回几页；注入、回退与工具共用同一个限制。",
+    },
   },
   {
     key: "recallOptions",
@@ -323,7 +422,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "harness",
-    summary: "逐键合并进每次 recall 请求体的覆盖项。只能在配置文件里编辑。",
+    summary: {
+      en: "Overrides merged key by key into every recall request body. Editable only in the config file.",
+      zh: "逐键合并进每次 recall 请求体的覆盖项。只能在配置文件里编辑。",
+    },
   },
   {
     key: "toolGuideExtra",
@@ -333,7 +435,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_TOOL_GUIDE_EXTRA",
     editable: true,
     scope: "harness",
-    summary: "追加在内置工具指南之后的自定义指引（只增不替）。",
+    summary: {
+      en: "Custom guidance appended after the built-in tool guide (it only adds, never replaces).",
+      zh: "追加在内置工具指南之后的自定义指引（只增不替）。",
+    },
   },
   {
     key: "pageRefreshEveryTurns",
@@ -343,7 +448,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_PAGE_REFRESH_EVERY_TURNS",
     editable: true,
     scope: "harness",
-    summary: "每多少个用户轮次刷新一次知识页清单（0 等同 1）。",
+    summary: {
+      en: "Refresh the knowledge-page roster once every this many user turns (0 means the same as 1).",
+      zh: "每多少个用户轮次刷新一次知识页清单（0 等同 1）。",
+    },
   },
 
   // ── pages ─────────────────────────────────────────────────────────────────────
@@ -356,7 +464,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_PAGE_TRIGGER_TYPE",
     editable: true,
     scope: "harness",
-    summary: "新建知识页用什么触发刷新；auto-refresh 最及时也最贵。",
+    summary: {
+      en: "What triggers a refresh for newly created knowledge pages; auto-refresh is the most current and the most expensive.",
+      zh: "新建知识页用什么触发刷新；auto-refresh 最及时也最贵。",
+    },
   },
   {
     key: "pageTriggerCron",
@@ -366,7 +477,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_PAGE_TRIGGER_CRON",
     editable: true,
     scope: "harness",
-    summary: "cron 触发的时间表（UTC，5 段）；H 表示按页名散列到各自分钟。",
+    summary: {
+      en: "The schedule for cron triggering (UTC, 5 fields); H means hash each page to its own minute.",
+      zh: "cron 触发的时间表（UTC，5 段）；H 表示按页名散列到各自分钟。",
+    },
   },
   {
     key: "pages",
@@ -375,8 +489,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "harness",
-    summary:
-      "逐页改写或停用内置知识页（false 停用，{source_query} 换问题）。只能在配置文件里编辑。",
+    summary: {
+      en: "Reword or disable the built-in knowledge pages, page by page (false disables one, {source_query} replaces its question). Editable only in the config file.",
+      zh: "逐页改写或停用内置知识页（false 停用，{source_query} 换问题）。只能在配置文件里编辑。",
+    },
   },
   {
     key: "customPages",
@@ -385,7 +501,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "harness",
-    summary: "你自己的知识页（名称 → {source_query, tags}）。只能在配置文件里编辑。",
+    summary: {
+      en: "Knowledge pages of your own (name → {source_query, tags}). Editable only in the config file.",
+      zh: "你自己的知识页（名称 → {source_query, tags}）。只能在配置文件里编辑。",
+    },
   },
 
   // ── retention ─────────────────────────────────────────────────────────────────
@@ -397,7 +516,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_RETAIN_SESSIONS",
     editable: true,
     scope: "harness",
-    summary: "会话结束后是否写回 transcript；关掉后召回与种子照常。",
+    summary: {
+      en: "Whether the transcript is written back after a session ends; with it off, recall and seeding work as before.",
+      zh: "会话结束后是否写回 transcript；关掉后召回与种子照常。",
+    },
   },
   {
     key: "retainTags",
@@ -407,7 +529,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_RETAIN_TAGS",
     editable: true,
     scope: "harness",
-    summary: "每次写回附加的标签，例：project:{gitProject}、env:work。",
+    summary: {
+      en: "Tags attached to every write-back, e.g. project:{gitProject}, env:work.",
+      zh: "每次写回附加的标签，例：project:{gitProject}、env:work。",
+    },
   },
   {
     key: "retainMetadata",
@@ -416,7 +541,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "harness",
-    summary: "每次写回附加的元数据（同 retainTags 的占位符）。只能在配置文件里编辑。",
+    summary: {
+      en: "Metadata attached to every write-back (the same placeholders as retainTags). Editable only in the config file.",
+      zh: "每次写回附加的元数据（同 retainTags 的占位符）。只能在配置文件里编辑。",
+    },
   },
   {
     key: "retainContext",
@@ -425,7 +553,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: true,
     scope: "harness",
-    summary: "随每次写回发送的 context，抽取据此判断一句话是谁说的。",
+    summary: {
+      en: "The context sent with every write-back; extraction uses it to decide who said a sentence.",
+      zh: "随每次写回发送的 context，抽取据此判断一句话是谁说的。",
+    },
   },
   {
     key: "manageBankConfig",
@@ -435,7 +566,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_MANAGE_BANK_CONFIG",
     editable: true,
     scope: "bank",
-    summary: "允许插件增量塑造 bank 自身配置（只补不改）。",
+    summary: {
+      en: "Let the plugin shape the bank's own configuration incrementally (it only adds, never changes).",
+      zh: "允许插件增量塑造 bank 自身配置（只补不改）。",
+    },
   },
   {
     key: "retainExtractionMode",
@@ -446,7 +580,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_RETAIN_EXTRACTION_MODE",
     editable: true,
     scope: "bank",
-    summary: "服务端从写回内容里抽取记忆的力度；verbose 更细也更贵。",
+    summary: {
+      en: "How hard the server extracts memories from what is written back; verbose is finer and more expensive.",
+      zh: "服务端从写回内容里抽取记忆的力度；verbose 更细也更贵。",
+    },
   },
   {
     key: "defaultBankConfig",
@@ -455,7 +592,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "bank",
-    summary: "新建 bank 时写入的 bank-config 字段（插件自管的字段除外）。只能在配置文件里编辑。",
+    summary: {
+      en: "Bank-config fields written when a bank is created (except the fields the plugin manages itself). Editable only in the config file.",
+      zh: "新建 bank 时写入的 bank-config 字段（插件自管的字段除外）。只能在配置文件里编辑。",
+    },
   },
   {
     key: "observationScopes",
@@ -466,7 +606,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_OBSERVATION_SCOPES",
     editable: true,
     scope: "bank",
-    summary: "归并观察的粒度；显式二维数组（字面 scope 列表）只能在配置文件里写。",
+    summary: {
+      en: "The granularity at which observations are grouped; an explicit two-dimensional array (a literal scope list) can only be written in the config file.",
+      zh: "归并观察的粒度；显式二维数组（字面 scope 列表）只能在配置文件里写。",
+    },
   },
   {
     key: "maxParallelRetains",
@@ -476,7 +619,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_MAX_PARALLEL_RETAINS",
     editable: true,
     scope: "harness",
-    summary: "并发写回请求上限；服务器返回 429 时应调低而不是调高。",
+    summary: {
+      en: "Cap on concurrent write-back requests; when the server returns 429, this should be lowered rather than raised.",
+      zh: "并发写回请求上限；服务器返回 429 时应调低而不是调高。",
+    },
   },
 
   // ── ingest ────────────────────────────────────────────────────────────────────
@@ -488,7 +634,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_AUTO_SEED",
     editable: true,
     scope: "harness",
-    summary: "冷仓库首次会话时用 git 历史自动播种。",
+    summary: {
+      en: "Auto-seed from git history on a cold repository's first session.",
+      zh: "冷仓库首次会话时用 git 历史自动播种。",
+    },
   },
   {
     key: "seedLimit",
@@ -498,7 +647,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_SEED_LIMIT",
     editable: true,
     scope: "harness",
-    summary: "自动播种最多取最近多少条提交。",
+    summary: {
+      en: "At most how many of the most recent commits auto-seeding takes.",
+      zh: "自动播种最多取最近多少条提交。",
+    },
   },
   {
     key: "codebaseSurvey",
@@ -508,7 +660,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_CODEBASE_SURVEY",
     editable: true,
     scope: "harness",
-    summary: "冷仓库时起一个无头 claude 巡览代码结构。",
+    summary: {
+      en: "On a cold repository, start a headless claude to survey the code structure.",
+      zh: "冷仓库时起一个无头 claude 巡览代码结构。",
+    },
   },
   {
     key: "surveyModel",
@@ -518,7 +673,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_SURVEY_MODEL",
     editable: true,
     scope: "harness",
-    summary: "巡览用的模型（claude -p --model）。",
+    summary: {
+      en: "The model used for the survey (claude -p --model).",
+      zh: "巡览用的模型（claude -p --model）。",
+    },
   },
   {
     key: "surveyBudgetUsd",
@@ -528,7 +686,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_SURVEY_BUDGET_USD",
     editable: true,
     scope: "harness",
-    summary: "单次巡览的花费上限（美元）。",
+    summary: {
+      en: "The spend cap for a single survey (US dollars).",
+      zh: "单次巡览的花费上限（美元）。",
+    },
   },
   {
     key: "surveyRefreshCommits",
@@ -538,7 +699,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_SURVEY_REFRESH_COMMITS",
     editable: true,
     scope: "harness",
-    summary: "累计多少条新提交后重跑巡览；0 表示只在冷启动播一次。",
+    summary: {
+      en: "Re-run the survey after this many new commits have accrued; 0 means seeding once at cold start only.",
+      zh: "累计多少条新提交后重跑巡览；0 表示只在冷启动播一次。",
+    },
   },
   {
     key: "gitIngest",
@@ -549,7 +713,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_GIT_INGEST",
     editable: true,
     scope: "harness",
-    summary: "git 历史怎么进记忆：只提交信息 / 含完整 diff / 不摄取。",
+    summary: {
+      en: "How git history enters memory: commit messages only / including full diffs / not ingested.",
+      zh: "git 历史怎么进记忆：只提交信息 / 含完整 diff / 不摄取。",
+    },
   },
   {
     key: "autoUpdate",
@@ -559,7 +726,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_AUTO_UPDATE",
     editable: true,
     scope: "harness",
-    summary: "每天自检并后台更新 ~/.hindsight/coding-agents；关掉即锁定版本。",
+    summary: {
+      en: "Self-check daily and update ~/.hindsight/coding-agents in the background; turning it off pins the version.",
+      zh: "每天自检并后台更新 ~/.hindsight/coding-agents；关掉即锁定版本。",
+    },
   },
 
   // ── scope ─────────────────────────────────────────────────────────────────────
@@ -571,7 +741,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_DISABLED",
     editable: true,
     scope: "bank",
-    summary: "硬开关：整个插件在记忆上变为惰性（无 bank、无写回）。",
+    summary: {
+      en: "Hard switch: the whole plugin becomes inert where memory is concerned (no bank, no write-back).",
+      zh: "硬开关：整个插件在记忆上变为惰性（无 bank、无写回）。",
+    },
   },
   {
     key: "optInOnly",
@@ -581,7 +754,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_OPT_IN_ONLY",
     editable: true,
     scope: "global",
-    summary: "只在被点名的目录里工作；未列出的项目完全不留痕。",
+    summary: {
+      en: "Work only in the named directories; projects that are not listed leave no trace at all.",
+      zh: "只在被点名的目录里工作；未列出的项目完全不留痕。",
+    },
   },
   {
     key: "optInPaths",
@@ -591,7 +767,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_OPT_IN_PATHS",
     editable: true,
     scope: "path",
-    summary: "点名的目录（按前缀匹配，支持 ~），其下每个仓库仍各自成库。",
+    summary: {
+      en: "The named directories (matched by prefix, ~ supported); each repository beneath them still gets its own bank.",
+      zh: "点名的目录（按前缀匹配，支持 ~），其下每个仓库仍各自成库。",
+    },
   },
   {
     key: "logLevel",
@@ -602,7 +781,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_LOG_LEVEL",
     editable: true,
     scope: "harness",
-    summary: "插件日志级别；HINDSIGHT_LOG_LEVEL 仍可用于临时排查。",
+    summary: {
+      en: "Plugin log level; HINDSIGHT_LOG_LEVEL can still be used for temporary troubleshooting.",
+      zh: "插件日志级别；HINDSIGHT_LOG_LEVEL 仍可用于临时排查。",
+    },
   },
   {
     key: "harness",
@@ -612,7 +794,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_HARNESS",
     editable: false,
     scope: "harness",
-    summary: "运行时适配器标识。在 DSH 里恒为 dsh，由宿主写入，不要手改。",
+    summary: {
+      en: "The runtime adapter identifier. In DSH it is always dsh, written by the host — do not change it by hand.",
+      zh: "运行时适配器标识。在 DSH 里恒为 dsh，由宿主写入，不要手改。",
+    },
   },
   {
     key: "harnesses",
@@ -621,8 +806,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "harness",
-    summary:
-      "按 harness 覆盖任意字段（harnesses.dsh / harnesses.claude-code …），在文件顶层之后、paths/banks 之前生效。仅文件可编辑。",
+    summary: {
+      en: "Override any field per harness (harnesses.dsh / harnesses.claude-code …); it applies after the file's top level and before paths/banks. Editable only in the file.",
+      zh: "按 harness 覆盖任意字段（harnesses.dsh / harnesses.claude-code …），在文件顶层之后、paths/banks 之前生效。仅文件可编辑。",
+    },
   },
   {
     key: "banks",
@@ -631,8 +818,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "bank",
-    summary:
-      "按【已解析的 bank id】覆盖：该项在 bank 解析之后生效，所以仓库换目录也不受影响。任何行为字段都能覆盖；bank 可把多个 id 合并到一个 bank（单跳、字面量，目标自身的段不再参与）。bank 解析类字段（bankId / mapPathToBank / bank / optInOnly / optInPaths）在此段内被忽略。本页用「按项目（banks）」标签页编辑。",
+    summary: {
+      en: 'Override by resolved bank id: it applies after bank resolution, so moving a repository elsewhere does not affect it. Any behavioural field can be overridden; a bank may merge several ids into one bank (single hop, literal, and the target\'s own section no longer takes part). Bank-resolution fields (bankId / mapPathToBank / bank / optInOnly / optInPaths) are ignored inside this section. This page edits it through the "By project (banks)" tab.',
+      zh: "按【已解析的 bank id】覆盖：该项在 bank 解析之后生效，所以仓库换目录也不受影响。任何行为字段都能覆盖；bank 可把多个 id 合并到一个 bank（单跳、字面量，目标自身的段不再参与）。bank 解析类字段（bankId / mapPathToBank / bank / optInOnly / optInPaths）在此段内被忽略。本页用「按项目（banks）」标签页编辑。",
+    },
   },
   {
     key: "paths",
@@ -641,8 +830,10 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "path",
-    summary:
-      "按【绝对路径前缀】覆盖连接类设置（serverMode / apiUrl / apiPort / apiToken 等），最长前缀生效；在 bank 解析之后、banks.<id> 之前生效，所以同一仓库的 bank 段仍会盖过它。仅文件可编辑。",
+    summary: {
+      en: "Override connection settings (serverMode / apiUrl / apiPort / apiToken and so on) by absolute path prefix; the longest prefix wins. It applies after bank resolution and before banks.<id>, so a bank section for the same repository still overrides it. Editable only in the file.",
+      zh: "按【绝对路径前缀】覆盖连接类设置（serverMode / apiUrl / apiPort / apiToken 等），最长前缀生效；在 bank 解析之后、banks.<id> 之前生效，所以同一仓库的 bank 段仍会盖过它。仅文件可编辑。",
+    },
   },
 ];
 

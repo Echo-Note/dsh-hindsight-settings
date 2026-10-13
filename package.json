@@ -1,8 +1,9 @@
 {
-  "name": "@local/dsh-hindsight-settings",
+  "name": "@Echo-Note/dsh-hindsight-settings",
   "version": "0.1.0",
   "private": true,
   "description": "DSH（DeepSeek Harness）的设置页伴随插件：在设置里直接读写 Hindsight coding-agents 的 ~/.hindsight/coding-agent.json",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Echo-Note/dsh-hindsight-settings.git"
@@ -21,6 +22,9 @@
     },
     "client": {
       "platform": "web"
+    },
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
     }
   },
   "scripts": {

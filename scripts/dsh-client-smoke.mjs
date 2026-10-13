@@ -290,6 +290,56 @@ function makeRemote({ mountThrows = false } = {}) {
   return { remote, mounts };
 }
 
+/**
+ * A `locale` stand-in: the real service's four methods, backed by one dictionary per language.
+ *
+ * `bind` returns a function that reads the ACTIVE language at call time (which is what makes a live
+ * switch work), and `register` records the dictionaries so the smoke test can prove the page
+ * registered a complete bilingual pair for its own namespace.
+ */
+function makeLocale(initial = "en") {
+  const dicts = new Map();
+  const listeners = [];
+  const state = { active: initial };
+  const lookup = (lang, key) => dicts.get(lang)?.[key] ?? dicts.get("en")?.[key] ?? key;
+  const service = {
+    register: (ns, pair) => {
+      for (const [lang, dict] of Object.entries(pair)) {
+        dicts.set(lang, { ...(dicts.get(lang) ?? {}), ...dict });
+      }
+      for (const listener of listeners) listener();
+      return () => {
+        dicts.clear();
+      };
+    },
+    bind: (ns) => (key, params) => {
+      const template = lookup(state.active, key);
+      return params === undefined
+        ? template
+        : template.replace(/\{(\w+)\}/g, (match, name) =>
+            name in params ? String(params[name]) : match
+          );
+    },
+    getLocale: () => ({ active: state.active, locales: [], revision: 1 }),
+    subscribe: (listener) => {
+      listeners.push(listener);
+      return () => undefined;
+    },
+  };
+  return {
+    service,
+    dicts,
+    registrations: () => [...dicts.keys()],
+    switchTo: (next) => {
+      state.active = next;
+      for (const listener of listeners) listener();
+    },
+    title: () => lookup(state.active, "title"),
+    loading: () => lookup(state.active, "loading.text"),
+    mountFailed: () => lookup(state.active, "unavailable.mountFailed"),
+  };
+}
+
 /** A `remote.hindsightSettings` stand-in: every method answers the gateway's `RemoteResult`. */
 function makeNamespace({ describe = async () => ({ ok: true, value: VIEW }) } = {}) {
   return {
@@ -305,17 +355,23 @@ function makeNamespace({ describe = async () => ({ ok: true, value: VIEW }) } = 
   };
 }
 
-function runApply({ remote, service, slots = true } = {}) {
+function runApply({ remote, service, slots = true, locale = makeLocale("en") } = {}) {
   const registered = [];
   const disposers = [];
   const ctx = {
-    // The page reads `remote` through ctx.get (never the property, which cordis refuses without
-    // inject), so the stub must answer that lookup as the real context does.
+    // The page reads `remote` and `locale` through ctx.get (never the property, which cordis refuses
+    // without inject), so the stub must answer those lookups as the real context does.
     get: (key) =>
-      key === "remote" ? remote : key === "remote.hindsightSettings" ? service : undefined,
-    effect: (execute) => {
+      key === "locale"
+        ? locale.service
+        : key === "remote"
+          ? remote
+          : key === "remote.hindsightSettings"
+            ? service
+            : undefined,
+    effect: (execute, label) => {
       const disposer = execute();
-      if (typeof disposer === "function") disposers.push(disposer);
+      if (typeof disposer === "function") disposers.push({ label, dispose: disposer });
       return () => undefined;
     },
   };
@@ -338,7 +394,7 @@ function runApply({ remote, service, slots = true } = {}) {
     };
   }
   pluginExports.apply(ctx);
-  return { registered, disposers };
+  return { registered, disposers, locale };
 }
 
 await check("apply() registers one `settings.section` contribution owned by an effect", () => {
@@ -349,11 +405,42 @@ await check("apply() registers one `settings.section` contribution owned by an e
   assert.notEqual(registered[0].slot, "plugins.detail.section");
   assert.equal(registered[0].spec.id, "hindsight-settings");
   assert.equal(registered[0].spec.order, 35);
+  assert.equal(registered[0].spec.locale, "dsh-hindsight-settings");
   assert.equal(typeof registered[0].spec.label, "function");
-  assert.equal(registered[0].spec.label(), "Hindsight 记忆设置");
+  // The label follows the active language without re-registering.
+  assert.equal(registered[0].spec.label(), "Hindsight memory settings");
   assert.equal(typeof registered[0].component, "function");
-  assert.equal(disposers.length, 1, "the registration must be owned by an effect");
-  for (const dispose of disposers) dispose();
+  // Both owned registrations: the page's slot entry and its locale dictionaries. Each must return a
+  // disposer, because a reload has to be able to collapse what this generation installed.
+  assert.deepEqual(disposers.map((entry) => entry.label).sort(), [
+    "dsh-hindsight-settings: page",
+    "hindsight-settings: dictionaries",
+  ]);
+  for (const entry of disposers) entry.dispose();
+});
+
+await check("apply() registers the page's dictionaries for both shipped locales", () => {
+  const locale = makeLocale("en");
+  const { remote } = makeRemote();
+  runApply({ remote, service: makeNamespace(), locale });
+  assert.deepEqual([...locale.registrations()].sort(), ["en", "zh"]);
+  const en = locale.dicts.get("en");
+  const zh = locale.dicts.get("zh");
+  assert.ok(en && zh, "both dictionaries must be registered");
+  assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort(), "the dictionaries must agree");
+  assert.equal(en.title, "Hindsight memory settings");
+  assert.equal(zh.title, "Hindsight 记忆设置");
+});
+
+await check("the navigation label follows a live language switch", () => {
+  const locale = makeLocale("en");
+  const { remote } = makeRemote();
+  const { registered } = runApply({ remote, service: makeNamespace(), locale });
+  const label = registered[0].spec.label;
+  assert.equal(label(), locale.title());
+  locale.switchTo("zh");
+  assert.equal(label(), "Hindsight 记忆设置");
+  assert.equal(label(), locale.title());
 });
 
 await check(
@@ -364,7 +451,7 @@ await check(
     await flush();
     assert.equal(mounts.length, 1, `expected one $mount call, got ${mounts.length}`);
     const contribution = mounts[0];
-    assert.equal(contribution.package, "@local/dsh-hindsight-settings");
+    assert.equal(contribution.package, "@Echo-Note/dsh-hindsight-settings");
     // Spread into a host array first: the contribution was built inside the `vm` realm, so its arrays
     // carry that realm's prototype and a deep comparison against a host array fails on identity.
     assert.deepEqual(
@@ -421,12 +508,49 @@ await check("the page explains a missing ctx.remote instead of throwing", () => 
   assert.ok(rendered.includes("Hindsight"), "the page title is missing");
 });
 
+await check("the page renders its copy in the active language", () => {
+  const en = runApply({ service: undefined, locale: makeLocale("en") });
+  const zh = runApply({ service: undefined, locale: makeLocale("zh") });
+  const english = JSON.stringify(en.registered[0].component({}));
+  const chinese = JSON.stringify(zh.registered[0].component({}));
+  assert.ok(english.includes("Hindsight memory settings"), "the English title is missing");
+  assert.ok(chinese.includes("Hindsight 记忆设置"), "the Chinese title is missing");
+  assert.ok(
+    english.includes("The host offers no Remote service"),
+    "the English unavailable line is missing"
+  );
+  assert.ok(
+    chinese.includes("宿主没有提供 Remote 服务"),
+    "the Chinese unavailable line is missing"
+  );
+  // Same page, same state: only the language differs, and the two must not agree.
+  assert.notEqual(english, chinese);
+});
+
+await check("the page follows a live switch without a remount", () => {
+  const locale = makeLocale("zh");
+  const { registered, locale: unused } = runApply({ service: undefined, locale });
+  void unused;
+  const page = registered[0].component;
+  assert.ok(JSON.stringify(page({})).includes("Hindsight 记忆设置"), "did not start in Chinese");
+  locale.switchTo("en");
+  // No re-registration, no remount: the same component renders the new language because every string
+  // is translated at render time.
+  assert.ok(
+    JSON.stringify(page({})).includes("Hindsight memory settings"),
+    "the live switch did not reach the page"
+  );
+});
+
 await check("the page explains a failed $mount instead of throwing", async () => {
   const { remote } = makeRemote({ mountThrows: true });
   const { registered } = runApply({ remote, service: makeNamespace() });
   await flush();
   const tree = registered[0].component({});
-  assert.ok(JSON.stringify(tree).includes("挂载失败"), "the mount failure is not reported");
+  assert.ok(
+    JSON.stringify(tree).includes("Mounting the Remote contribution failed"),
+    "the mount failure is not reported"
+  );
 });
 
 await check("a mounted page renders without a renderer and shows the loading state", async () => {
@@ -438,7 +562,7 @@ await check("a mounted page renders without a renderer and shows the loading sta
   const tree = registered[0].component({});
   assert.ok(tree !== null && typeof tree === "object", "expected a rendered element");
   assert.ok(
-    JSON.stringify(tree).includes("正在读取"),
+    JSON.stringify(tree).includes("Reading the host configuration"),
     "no loading state while describe is in flight"
   );
 });

@@ -23,6 +23,15 @@
 type FieldGroup = "connection" | "routing" | "recall" | "pages" | "retention" | "ingest" | "scope";
 /** How a field is rendered and validated. */
 type FieldKind = "string" | "secret" | "number" | "boolean" | "enum" | "stringList" | "json";
+/**
+ * The languages the page can render. Both halves live in this table because the page bundles it and
+ * picks one by `ctx.locale`; the Remote response carries a single string only as a fallback for a
+ * field key the running page does not know.
+ */
+interface LocalizedText {
+    readonly en: string;
+    readonly zh: string;
+}
 /** Where a value may be overridden from. Mirrors upstream's layers. */
 type FieldScope = "global" | "harness" | "bank" | "path";
 interface ConfigField {
@@ -43,21 +52,15 @@ interface ConfigField {
     /** False = the page renders it read-only (see the module doc for why). */
     readonly editable: boolean;
     readonly scope: FieldScope;
-    /** One line for the page. */
-    readonly summary: string;
+    /** One line for the page, in every language the page can render. */
+    readonly summary: LocalizedText;
 }
 interface FieldGroupDescriptor {
     readonly id: FieldGroup;
-    readonly title: string;
-    readonly summary: string;
+    readonly title: LocalizedText;
+    readonly summary: LocalizedText;
 }
 declare const FIELD_GROUPS: readonly FieldGroupDescriptor[];
-/**
- * Every field of upstream's `RawConfig`, in page order.
- *
- * `env` is copied from upstream's `ENV_KEYS`; a field without one is file-only (upstream documents
- * the four map-valued settings that way, and this table extends it to every nested value).
- */
 declare const CONFIG_FIELDS: readonly ConfigField[];
 /** The fields the page may write. Everything else is display-only. */
 declare const EDITABLE_FIELDS: readonly ConfigField[];
@@ -165,6 +168,12 @@ interface SettingsFieldView {
     readonly env?: string;
     readonly editable: boolean;
     readonly scope: string;
+    /**
+     * The Chinese line from the field table. The wire carries ONE string on purpose: the page bundles
+     * the bilingual table itself (`fields.ts` is built from this one declaration), so it renders the
+     * half its `ctx.locale` asks for without the response carrying both. This string is only the
+     * fallback for a field key the running page does not know.
+     */
     readonly summary: string;
     /** The value in the file's top level, or `null` when the file does not set it. */
     readonly value: unknown;
@@ -271,7 +280,7 @@ declare function recordStatus(step: string, details?: Record<string, unknown>, c
 declare function readStatusFile(configFile?: string): StatusFile;
 
 /** Cordis plugin name (loader diagnostics). */
-declare const name = "@local/dsh-hindsight-settings";
+declare const name = "@Echo-Note/dsh-hindsight-settings";
 /** The Cordis service key the Typert manifest resolves against this plugin's context. */
 declare const SERVICE_KEY = "hindsightSettings";
 /** Host shapes, taken structurally so this package needs no cordis dependency at all. */

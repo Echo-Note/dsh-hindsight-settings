@@ -1,5 +1,8 @@
-# @local/dsh-hindsight-settings
+# @Echo-Note/dsh-hindsight-settings
 
+English | [中文](README.zh.md)
+
+![The Hindsight settings page in DeepSeek Harness](assets/screenshot-1-settings.png)
 A DeepSeek Harness (DSH) companion plugin that adds a **Hindsight 记忆设置** page to Settings, so
 `~/.hindsight/coding-agent.json` can be edited from the GUI instead of by hand.
 
@@ -13,40 +16,62 @@ service, and leaves the plugin untouched.
 
 ## Install
 
-From a clone of this repository (the built `lib/` is committed, so the build is optional):
+**From GitHub** — the package is consumed straight from this repository, and its
+`@vectorize-io/hindsight-coding-agents` dependency is installed with it, so one install gets both:
+
+```bash
+# Any profile except a packaged Desktop one, whose profile the CLI refuses to write:
+dsh plugin --profile <profile> add github:Echo-Note/dsh-hindsight-settings
+```
+
+In the **desktop app** (the profile the Electron shell owns) the CLI refuses by design; install from
+the GUI instead — **Settings → Plugins → install**, and paste the same spec:
+
+```
+github:Echo-Note/dsh-hindsight-settings
+```
+
+The 40-character commit this resolves to is pinned by the package manager's lockfile, so a later
+`git push` does not silently change what you run: re-install (or update) to move it. Git installs
+build nothing — the compiled `lib/` is committed — so the install is a checkout, not a build.
+
+Naming it with the scope is optional. `github:Echo-Note/dsh-hindsight-settings` installs it under the
+name in this package's `package.json`; to force a different key, use the npm alias form, which is what
+this repository's own dry-run used:
+
+```bash
+dsh plugin --profile <profile> add '@Echo-Note/dsh-hindsight-settings@github:Echo-Note/dsh-hindsight-settings'
+```
+
+**From a local checkout** (while editing this package):
 
 ```bash
 git clone https://github.com/Echo-Note/dsh-hindsight-settings.git
 cd dsh-hindsight-settings
 npm install          # dev dependencies only; nothing is needed at runtime but the peer packages
 npm run build        # optional: refreshes lib/ from src/
-dsh plugin --profile desktop add link:"$PWD"
+dsh plugin --profile <profile> add link:"$PWD"
 ```
-
-Any other absolute path works the same way:
-
-```bash
-dsh plugin --profile desktop add link:/absolute/path/to/this/package
-```
-
-This package declares `@vectorize-io/hindsight-coding-agents` as an npm dependency, so that one
-command installs **both** packages — you do not install the Hindsight plugin separately.
-
-One thing stays manual, and it is a property of dsh rather than of this package: a package's bundle
-is mounted only when the profile selects it in `dsh.profile.bundles`, and dsh's own plugin-manager
-README states that "an unselected plain dependency is left out" — the manager lists bundles a
-dependency supplies but does NOT select them. So enable **Hindsight** once in the sidebar's Plugins
-page (or `dsh plugin --profile desktop add @vectorize-io/hindsight-coding-agents`, which is what put
-it in the list the first time). `dsh` has no bundle-depends-on-bundle field to express this
-(`DshManifest` carries only `manifestVersion`, `bundle.patch`, `client`, `engines.dsh`), and the
-alternative — our patch inserting Hindsight's row directly — would compose the same row twice when its
-own bundle is also enabled, because patch `insert` appends without deduplicating entry ids.
 
 `link:` (not `file:`) is the right spec for a package you may edit: `file:` copies a snapshot into the
-profile, `link:` symlinks it, so a rebuilt browser half is picked up on the next page load. The host
-half, the `./typert` manifest and the browser bundle are all read at startup, and dsh's plugin manager
-notes that "package replacements require restarting the process to load a fresh JavaScript module
-generation" — so restart once after installing.
+profile, `link:` symlinks it, so a rebuilt browser half is picked up on the next page load.
+
+### The one manual step
+
+A package's bundle is mounted only when the profile selects it in `dsh.profile.bundles`, and dsh's own
+plugin-manager README states that "an unselected plain dependency is left out" — the manager lists
+bundles a dependency supplies but does NOT select them. So after installing this package, enable
+**Hindsight** once in **Settings → Plugins** (installing the bundle by name,
+`dsh plugin --profile <profile> add @vectorize-io/hindsight-coding-agents`, does the same thing).
+
+`dsh` has no bundle-depends-on-bundle field to express this (`DshManifest` carries only
+`manifestVersion`, `bundle.patch`, `client`, `engines.dsh`), and the alternative — our patch inserting
+Hindsight's row directly — would compose the same row twice when its own bundle is also enabled,
+because patch `insert` appends without deduplicating entry ids.
+
+The host half, the `./typert` manifest and the browser bundle are all read at startup, and dsh's
+plugin manager notes that "package replacements require restarting the process to load a fresh
+JavaScript module generation" — so **restart once** after installing.
 
 ## How it works
 
@@ -149,3 +174,7 @@ Both halves land in `lib/`, so `npm run build` removes `lib/` once and then buil
 `src/fields.ts` is the single declaration of the config surface. `src/upstream.test.ts` checks it
 against the **installed** Hindsight plugin (its bundle keeps the source shape), so upgrading that
 plugin fails this package's tests instead of silently hiding a new setting.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).

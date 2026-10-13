@@ -25,7 +25,7 @@ const check = (label, condition, detail = "") => {
 
 console.log("manifest");
 check("model is an object", typeof TYPERT.model === "object" && TYPERT.model !== null);
-check("names its package", TYPERT.package === "@local/dsh-hindsight-settings", TYPERT.package);
+check("names its package", TYPERT.package === "@Echo-Note/dsh-hindsight-settings", TYPERT.package);
 check(
   "declares every invocation's service in the model",
   TYPERT.model.services.every((service) =>

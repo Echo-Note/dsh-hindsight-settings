@@ -8,4 +8,4 @@
 # The Hindsight plugin itself stays untouched — it deliberately imports nothing from dsh.
 - insert:
     - id: hindsight-settings
-      name: '@local/dsh-hindsight-settings'
+      name: '@Echo-Note/dsh-hindsight-settings'

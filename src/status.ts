@@ -48,7 +48,7 @@ function readStatus(path: string, entryId: string, configFile: string): StatusFi
       return {
         updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
         package:
-          typeof parsed.package === "string" ? parsed.package : "@local/dsh-hindsight-settings",
+          typeof parsed.package === "string" ? parsed.package : "@Echo-Note/dsh-hindsight-settings",
         entryId: typeof parsed.entryId === "string" ? parsed.entryId : entryId,
         configPath: typeof parsed.configPath === "string" ? parsed.configPath : configFile,
         events: parsed.events as StatusEvent[],
@@ -59,7 +59,7 @@ function readStatus(path: string, entryId: string, configFile: string): StatusFi
   }
   return {
     updatedAt: "",
-    package: "@local/dsh-hindsight-settings",
+    package: "@Echo-Note/dsh-hindsight-settings",
     entryId,
     configPath: configFile,
     events: [],

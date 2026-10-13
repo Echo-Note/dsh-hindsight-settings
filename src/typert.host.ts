@@ -16,7 +16,7 @@
  * The payloads are plain JSON by construction (see `service.ts`), so every codec is a pass-through
  * validator with a registered `schemas[]` entry rather than a second schema to keep in sync.
  */
-const PACKAGE = "@local/dsh-hindsight-settings";
+const PACKAGE = "@Echo-Note/dsh-hindsight-settings";
 const SERVICE = "hindsightSettings";
 
 /** One strict, pass-through codec for a JSON payload. */

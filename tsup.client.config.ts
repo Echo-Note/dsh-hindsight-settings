@@ -10,7 +10,7 @@ import { defineConfig } from "tsup";
  * `packages/client/tsdown.client.ts` preset (banner/footer/intro + entryFileNames `client.js`)
  * without depending on it — that preset imports dsh-repository internals and ships in no package.
  */
-const PLUGIN_ID = "@local/dsh-hindsight-settings";
+const PLUGIN_ID = "@Echo-Note/dsh-hindsight-settings";
 
 /**
  * The shell's frozen module table (dsh `packages/client/web/src/platform.ts`, PLATFORM_MODULES).

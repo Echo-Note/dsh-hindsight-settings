@@ -8,7 +8,7 @@
  */
 
 /** This package's name, as `cordis.patch.yml` mounts it and as the module loader keys the bundle. */
-export const PACKAGE_NAME = "@local/dsh-hindsight-settings";
+export const PACKAGE_NAME = "@Echo-Note/dsh-hindsight-settings";
 
 /** The Loader entry id this package mounts under; also its settings-form namespace. */
 export const ENTRY_ID = "hindsight-settings";

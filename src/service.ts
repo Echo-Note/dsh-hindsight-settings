@@ -36,6 +36,12 @@ export interface SettingsFieldView {
   readonly env?: string;
   readonly editable: boolean;
   readonly scope: string;
+  /**
+   * The Chinese line from the field table. The wire carries ONE string on purpose: the page bundles
+   * the bilingual table itself (`fields.ts` is built from this one declaration), so it renders the
+   * half its `ctx.locale` asks for without the response carrying both. This string is only the
+   * fallback for a field key the running page does not know.
+   */
   readonly summary: string;
   /** The value in the file's top level, or `null` when the file does not set it. */
   readonly value: unknown;
@@ -142,7 +148,10 @@ export function createSettingsService(
           ...(field.env === undefined ? {} : { env: field.env }),
           editable: field.editable,
           scope: field.scope,
-          summary: field.summary,
+          // The wire keeps ONE string (the Chinese half) because the page bundles the bilingual
+          // table itself and picks a language from `ctx.locale`; this is only the fallback for a
+          // field key the running page does not know, so the contract need not carry both.
+          summary: field.summary.zh,
           // Secrets are redacted from every response, the way dsh's own settings service redacts a
           // `role('secret')` field ("kept out of form responses"). The page still knows whether the
           // file sets one (`inFile`), and `apply` accepts a replacement or an explicit clear.
