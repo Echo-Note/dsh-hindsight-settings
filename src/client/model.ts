@@ -801,3 +801,70 @@ export function summarizeApply(
   if (parts.length === 0) parts.push(`已更新 ${result.path}`);
   return `已保存到 ${result.path}：${parts.join("，")}。`;
 }
+
+/** One block of the bank-resolution help shown on the 按项目（banks） tab. */
+export interface HelpSection {
+  readonly title: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * How banking actually works, taken from the upstream README's *Bank resolution*,
+ * *Per-repo opt-in/out* and *Per-directory overrides* sections.
+ *
+ * This lives here, as data, so a test can hold it to the documented placeholders and resolution
+ * order: a help text that drifts from the plugin's real behaviour is worse than none, and nobody
+ * reads a paragraph twice to check it.
+ */
+export const BANKS_HELP: readonly HelpSection[] = Object.freeze([
+  {
+    title: "一个仓库一个 bank",
+    lines: [
+      "记忆按仓库隔离。插件按【当前工作目录】解析 bank，顺序如下（先命中者胜）：",
+      "① mapPathToBank —— 绝对路径的最长前缀；优先级最高，能盖过 bankId；linked worktree 继承主检出的映射。",
+      "② 静态 —— 设了 bankId（或把 dynamicBankId 设为 false）。",
+      "③ 动态 —— 用 bankIdTemplate 生成，默认 coding-agent::{gitProject}。",
+    ],
+  },
+  {
+    title: "bankIdTemplate 的占位符",
+    lines: [
+      "{gitProject} —— worktree 感知的仓库名：同一仓库的所有 worktree 共用一个 bank；不在仓库里时，取会话启动目录的名字。",
+      "{project} —— 当前目录名；{harness} —— 发起调用的入口（dsh / claude-code / codex …）。",
+      "{channel} / {user} —— 来自 $HINDSIGHT_CHANNEL_ID / $HINDSIGHT_USER_ID。",
+      "默认模板对 harness 中立，所以各 agent 共享同一个仓库 bank；想按 agent 分开就写 {harness}-{gitProject}。",
+    ],
+  },
+  {
+    title: "谁盖过谁（后者胜）",
+    lines: [
+      "内置默认值 → 环境变量 → 文件顶层 → harnesses.<name> → paths.<前缀> → banks.<已解析 id>。",
+      "mapPathToBank、harnesses、paths、banks、retainMetadata 是键值映射，只能写在文件里。",
+    ],
+  },
+  {
+    title: "本标签页改的是 banks.<id>",
+    lines: [
+      "它按【已解析的 bank id】选中，并在解析之后生效 —— 所以仓库搬到别处也依然命中。",
+      "任何行为字段都能在此覆盖；bank 字段可以把多个 id 合并到一个 bank（单跳、字面量，目标自身的段不再参与）。",
+      "bank 解析类字段（bankId / mapPathToBank / bank / optInOnly / optInPaths）写在 bank 段里会被忽略。",
+      '示例：{"banks": {"coding-agent::backend": {"bank": "team::product"}, "coding-agent::frontend": {"bank": "team::product"}}}',
+    ],
+  },
+  {
+    title: "paths.<前缀> 与常见配方",
+    lines: [
+      "paths 按目录前缀覆盖连接类设置（serverMode / apiUrl / apiPort / apiToken）；在解析之后、banks.<id> 之前生效，所以 bank 段仍能盖过它。本页只列出，请在文件里编辑。",
+      '按【目录】把一片仓库归到一个 bank：{"mapPathToBank": {"/Users/me/work/client-x": "client-x-memory"}}',
+      "按【id】把手工挑的几个仓库归到一个 bank：用上面的 banks 示例。",
+    ],
+  },
+  {
+    title: "怎么看我的 bank id 到底是哪个",
+    lines: [
+      "上游 v2 插件把 seed / 会话横幅写进插件日志：~/.hindsight/coding-agents-logs/plugin.log（日志里出现 bank=<id>）。",
+      "把 logLevel 设为 debug 会记下更详细的过程；结构化事件在同目录的 diag.jsonl。",
+      "权威说明见 hindsight-integrations/coding-agents/README.md 的 Bank resolution 一节。",
+    ],
+  },
+]);

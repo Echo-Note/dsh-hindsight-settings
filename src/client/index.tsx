@@ -57,6 +57,7 @@ import {
   SERVICE_KEY,
   SETTINGS_SLOT,
   UNSET_TEXT,
+  BANKS_HELP,
   banksScopeText,
   buildTabs,
   describeAvailability,
@@ -425,6 +426,12 @@ const STYLES = [
   ".dhs-add{display:flex;flex-wrap:wrap;align-items:center;gap:6px}",
   ".dhs-add-input{flex:1 1 220px;min-width:160px}",
   ".dhs-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}",
+  ".dhs-help{margin:6px 0 10px}",
+  ".dhs-help-toggle{cursor:pointer;font:inherit;padding:4px 10px;border-radius:6px;border:1px solid var(--dsh-border,rgba(127,127,127,.35));background:transparent;color:inherit}",
+  ".dhs-help-body{margin-top:8px;padding:10px 12px;border-left:3px solid var(--dsh-border,rgba(127,127,127,.35));display:flex;flex-direction:column;gap:10px}",
+  ".dhs-help-title{font-weight:600}",
+  ".dhs-help-line{opacity:.85;line-height:1.55;font-size:.92em}",
+  ".dhs-help-section{display:flex;flex-direction:column;gap:2px}",
 ].join("");
 
 /** Inject the stylesheet once; the element id is the guard. */
@@ -464,13 +471,56 @@ interface Notice {
  * The gate is a separate component so the hooks below it are unconditional: `<HindsightSettingsPage>`
  * runs a single hook and then either explains itself or mounts `<SettingsForm>`.
  */
+/** The bank-resolution help, from the upstream README's Bank resolution section. */
+function BanksHelp(): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return React.createElement(
+    "div",
+    { className: "dhs-help" },
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "dhs-help-toggle",
+        onClick: () => setOpen((previous) => !previous),
+      },
+      open ? "收起「bank 是怎么解析的」" : "不知道怎么设置？bank 是怎么解析的（展开说明）"
+    ),
+    open
+      ? React.createElement(
+          "div",
+          { className: "dhs-help-body" },
+          BANKS_HELP.map((section) =>
+            React.createElement(
+              "div",
+              { className: "dhs-help-section", key: section.title },
+              React.createElement("div", { className: "dhs-help-title" }, section.title),
+              section.lines.map((line, index) =>
+                React.createElement(
+                  "div",
+                  { className: "dhs-help-line", key: `${section.title}-${index}` },
+                  line
+                )
+              )
+            )
+          )
+        )
+      : null
+  );
+}
+
 function createPage(
   store: ServiceStore,
   report: (message: string) => void
 ): () => React.ReactElement {
   return function HindsightSettingsPage(): React.ReactElement {
     ensureStyles();
-    report("render: entered");
+    const entered = React.useRef(false);
+    if (!entered.current) {
+      // Once per mount: a line per render would flood the trail the moment a user clicks a tab.
+      entered.current = true;
+      report("render: entered");
+    }
     const state = useServiceState(store);
 
     if (state.kind !== "ready") {
@@ -847,6 +897,7 @@ function BanksPanel(props: BanksPanelProps): React.ReactElement {
     "div",
     { className: "dhs-scope" },
     React.createElement("div", { className: "dhs-note" }, banksScopeText()),
+    React.createElement(BanksHelp),
     React.createElement(
       "div",
       { className: "dhs-subhead" },

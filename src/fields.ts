@@ -196,7 +196,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_BANK_ID",
     editable: true,
     scope: "bank",
-    summary: "固定 bank id；设了它就不再按仓库动态分库（除非 dynamicBankId 为 true）。",
+    summary:
+      "固定使用这个 bank。解析顺序：mapPathToBank → 本项 → bankIdTemplate；设了它就不再按仓库动态分库，除非 dynamicBankId 为 true。",
   },
   {
     key: "dynamicBankId",
@@ -206,7 +207,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_DYNAMIC_BANK_ID",
     editable: true,
     scope: "bank",
-    summary: "即使设了 bankId 也强制按仓库动态解析。",
+    summary:
+      "默认在未设 bankId 时动态解析。设 true＝即使设了 bankId 也按仓库动态分库；设 false＝强制静态，始终用 bankId。",
   },
   {
     key: "bankIdTemplate",
@@ -216,7 +218,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_BANK_ID_TEMPLATE",
     editable: true,
     scope: "bank",
-    summary: "动态 bank id 的格式；占位符：{gitProject} {project} {harness} {channel} {user}。",
+    summary:
+      "动态 bank id 的模板，默认 coding-agent::{gitProject}（各 agent 共享同一个仓库 bank）。占位符：{gitProject}＝worktree 感知的仓库名（同一仓库的所有 worktree 共享；不在仓库中时取会话启动目录名）、{project}＝当前目录名、{harness}、{channel}、{user}。想按 agent 分开就写 {harness}-{gitProject}。",
   },
   {
     key: "mapPathToBank",
@@ -225,7 +228,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "path",
-    summary: "绝对路径 → bank 的映射，最长前缀生效，优先级最高。只能在配置文件里编辑。",
+    summary:
+      "绝对路径 → bank 名；最长前缀生效，优先级最高（可盖过 bankId），linked worktree 继承主检出的映射。键值映射，仅文件可编辑。",
   },
   {
     key: "resolveWorktrees",
@@ -617,7 +621,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     editable: false,
     scope: "harness",
     summary:
-      "按 harness 覆盖任意字段（harnesses.dsh / harnesses.claude-code …）。只能在配置文件里编辑。",
+      "按 harness 覆盖任意字段（harnesses.dsh / harnesses.claude-code …），在文件顶层之后、paths/banks 之前生效。仅文件可编辑。",
   },
   {
     key: "banks",
@@ -626,7 +630,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "bank",
-    summary: "按已解析的 bank id 覆盖：禁用、改名（bank）、改行为。只能在配置文件里编辑。",
+    summary:
+      "按【已解析的 bank id】覆盖：该项在 bank 解析之后生效，所以仓库换目录也不受影响。任何行为字段都能覆盖；bank 可把多个 id 合并到一个 bank（单跳、字面量，目标自身的段不再参与）。bank 解析类字段（bankId / mapPathToBank / bank / optInOnly / optInPaths）在此段内被忽略。本页用「按项目（banks）」标签页编辑。",
   },
   {
     key: "paths",
@@ -635,7 +640,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     editable: false,
     scope: "path",
-    summary: "按绝对路径前缀覆盖（可换服务器/租户）。只能在配置文件里编辑。",
+    summary:
+      "按【绝对路径前缀】覆盖连接类设置（serverMode / apiUrl / apiPort / apiToken 等），最长前缀生效；在 bank 解析之后、banks.<id> 之前生效，所以同一仓库的 bank 段仍会盖过它。仅文件可编辑。",
   },
 ];
 

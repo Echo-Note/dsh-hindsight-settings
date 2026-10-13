@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { CONFIG_FIELDS, FIELD_GROUPS, type FieldKind } from "../fields";
 import {
+  BANKS_HELP,
   BANKS_TAB_ID,
   CONTRIBUTION,
   LOADING_TEXT,
@@ -658,5 +659,59 @@ describe("diffDraft with an explicit clear", () => {
   it("treats clearing a key the file does not set as no change", () => {
     const fields = [makeField({ key: "ghost", kind: "secret", value: null, inFile: false })];
     expect(diffDraft(fields, draftFromFields(fields), new Set(["ghost"])).patch).toEqual({});
+  });
+});
+
+describe("BANKS_HELP (the in-page explanation of bank resolution)", () => {
+  const text = BANKS_HELP.flatMap((section) => [section.title, ...section.lines]).join("\n");
+
+  it("states the resolution order the upstream README defines", () => {
+    const mapPath = text.indexOf("mapPathToBank");
+    const staticBank = text.indexOf("动态 —— 用 bankIdTemplate");
+    expect(mapPath).toBeGreaterThan(-1);
+    expect(text).toContain("② 静态");
+    expect(staticBank).toBeGreaterThan(mapPath);
+    expect(text).toContain("默认 coding-agent::{gitProject}");
+  });
+
+  it("documents every placeholder, because a wrong template silently makes a second bank", () => {
+    for (const placeholder of ["{gitProject}", "{project}", "{harness}", "{channel}", "{user}"]) {
+      expect(text).toContain(placeholder);
+    }
+    // The worktree subtlety is the one users get wrong: all worktrees of a repo share one bank.
+    expect(text).toContain("worktree");
+    expect(text).toContain("{harness}-{gitProject}");
+  });
+
+  it("names the full layering chain, in order", () => {
+    const chain = [
+      "内置默认值",
+      "环境变量",
+      "文件顶层",
+      "harnesses.<name>",
+      "paths.<前缀>",
+      "banks.<已解析 id>",
+    ];
+    let cursor = -1;
+    for (const layer of chain) {
+      const at = text.indexOf(layer);
+      expect(at, `${layer} missing`).toBeGreaterThan(-1);
+      expect(at, `${layer} out of order`).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+  });
+
+  it("says which fields a bank section ignores, and how to converge two ids", () => {
+    for (const ignored of ["bankId", "mapPathToBank", "bank", "optInOnly", "optInPaths"]) {
+      expect(text).toContain(ignored);
+    }
+    expect(text).toContain('"team::product"');
+  });
+
+  it("tells the user where the resolved bank id can be read", () => {
+    // Upstream writes the v2 seed/session banner to the plugin log rather than a TUI toast.
+    expect(text).toContain("coding-agents-logs/plugin.log");
+    expect(text).toContain("bank=<id>");
+    expect(text).toContain("diag.jsonl");
   });
 });

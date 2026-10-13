@@ -102,3 +102,28 @@ describe("package wiring", () => {
     expect(patch).toContain(`name: '${PACKAGE_NAME}'`);
   });
 });
+
+describe("the routing fields explain the documented resolution order", () => {
+  const summaryOf = (key: string): string =>
+    CONFIG_FIELDS.find((field) => field.key === key)?.summary ?? "";
+
+  it("says what sets a bank, in the order the plugin resolves it", () => {
+    expect(summaryOf("bankId")).toContain("mapPathToBank");
+    expect(summaryOf("mapPathToBank")).toContain("盖过 bankId");
+    expect(summaryOf("bankIdTemplate")).toContain("{gitProject}");
+    expect(summaryOf("bankIdTemplate")).toContain("{harness}-{gitProject}");
+  });
+
+  it("explains dynamicBankId in both directions, because the default is conditional", () => {
+    const text = summaryOf("dynamicBankId");
+    expect(text).toContain("true");
+    expect(text).toContain("false");
+    expect(text).toContain("动态");
+  });
+
+  it("no longer claims banks and paths are file-only now that the page edits banks", () => {
+    expect(summaryOf("banks")).toContain("按项目");
+    expect(summaryOf("banks")).not.toContain("只能在配置文件里编辑");
+    expect(summaryOf("paths")).toContain("仅文件可编辑");
+  });
+});
