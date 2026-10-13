@@ -1,0 +1,11 @@
+# Companion-package patch for the DSH profile.
+#
+# This package owns no memory logic: it mounts one extra Loader row whose Config schema is the
+# settings surface for the Hindsight plugin's ONE shared config file
+# (~/.hindsight/coding-agent.json). The host half mirrors that file into this row and writes
+# edits back to it; the browser half renders the page on the Hindsight bundle's page.
+#
+# The Hindsight plugin itself stays untouched — it deliberately imports nothing from dsh.
+- insert:
+    - id: hindsight-settings
+      name: '@local/dsh-hindsight-settings'

@@ -1,0 +1,49 @@
+{
+  "name": "@local/dsh-hindsight-settings",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Companion DeepSeek Harness settings page for @vectorize-io/hindsight-coding-agents: reads and writes the one shared ~/.hindsight/coding-agent.json.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./typert": "./lib/typert.host.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf lib && tsup && tsup --config tsup.client.config.ts",
+    "build:host": "tsup",
+    "build:client": "tsup --config tsup.client.config.ts",
+    "test": "vitest run",
+    "test:smoke": "node scripts/dsh-client-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"*.ts\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"*.ts\"",
+    "test:typert": "node scripts/typert-selfcheck.mjs"
+  },
+  "dependencies": {
+    "@vectorize-io/hindsight-coding-agents": "^0.8.1"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "prettier": "^3.9.10",
+    "react": "^18.3.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}
