@@ -15,7 +15,9 @@
  *      for anything else throws at materialization;
  *   5. `apply()` registers into `settings.section` — NOT `plugins.detail.section` — when given a stub
  *      `slots` service, and mounts its Remote contribution exactly once when given a stub `remote`;
- *   6. the page tolerates a missing `ctx.remote` by rendering an explanation instead of throwing.
+ *   6. the contribution declares the four methods the host namespace carries — `describe` (with its
+ *      optional `scope`), `note`, `applyScoped` and `apply` — each by NAME, never by index;
+ *   7. the page tolerates a missing `ctx.remote` by rendering an explanation instead of throwing.
  *
  * This file is deliberately platform-neutral: every path is derived from `import.meta.url`, so it
  * runs unchanged on Windows, macOS and Linux.
@@ -288,10 +290,14 @@ function makeRemote({ mountThrows = false } = {}) {
   return { remote, mounts };
 }
 
-/** A `remote.hindsightSettings` stand-in: both methods answer the gateway's `RemoteResult`. */
+/** A `remote.hindsightSettings` stand-in: every method answers the gateway's `RemoteResult`. */
 function makeNamespace({ describe = async () => ({ ok: true, value: VIEW }) } = {}) {
   return {
     describe,
+    applyScoped: async () => ({
+      ok: true,
+      value: { path: VIEW.path, changed: true, removed: [] },
+    }),
     apply: async (patch) => ({
       ok: true,
       value: { path: VIEW.path, changed: true, removed: ["x"] },
@@ -363,17 +369,41 @@ await check(
     // carry that realm's prototype and a deep comparison against a host array fails on identity.
     assert.deepEqual(
       [...contribution.descriptors].map((d) => d.method),
-      ["describe", "note", "apply"]
+      ["describe", "note", "applyScoped", "apply"]
     );
     for (const descriptor of contribution.descriptors) {
       assert.equal(descriptor.service, "hindsightSettings");
       assert.equal(descriptor.namespace, "hindsightSettings");
       assert.equal(descriptor.result.mode, "src-json");
     }
-    // $mount refuses a Client parameter without a strict codec, so the input must carry one.
+    // $mount refuses a Client parameter without a strict codec, so every input must carry one.
     const [parameter] = descriptorByMethod(contribution, "apply").parameters;
     assert.equal(parameter.codec.mode, "strict");
     assert.equal(parameter.wire, "patch");
+
+    // `describe` declares its OPTIONAL scope argument: top reads call it with no argument, a bank
+    // read passes one, and both must be dispatchable from the same contribution.
+    const describeParameters = [...descriptorByMethod(contribution, "describe").parameters];
+    assert.deepEqual(
+      describeParameters.map((entry) => entry.name),
+      ["scope"]
+    );
+    assert.equal(describeParameters[0].codec.mode, "strict");
+    // Optional like the host manifest's: the top read is still expressible as one scope argument.
+    assert.equal(describeParameters[0].acceptsUndefined, true);
+
+    // `applyScoped` is the banks.<id> write: scope first, then patch, both strict.
+    const scoped = descriptorByMethod(contribution, "applyScoped");
+    // Spread first: the contribution was built inside the `vm` realm, so its arrays do not share this
+    // realm's prototype and a deep comparison against a host array fails on identity.
+    assert.deepEqual(
+      [...scoped.parameters].map((entry) => entry.name),
+      ["scope", "patch"]
+    );
+    for (const entry of scoped.parameters) {
+      assert.equal(entry.codec.mode, "strict");
+      assert.equal(entry.source, "json");
+    }
   }
 );
 

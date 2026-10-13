@@ -32,6 +32,14 @@
  * carrier dropped. Assembly faults (arity mismatch, method unmounted, contribution withdrawn) still
  * reject, so each call is guarded on both paths.
  *
+ * ## The page's shape
+ *
+ * Seven groups of settings in one column was unreadable, so the surface is now a tab bar: one tab per
+ * `FIELD_GROUPS` entry plus a final **按项目（banks）** tab. The header, the config-file path, the
+ * availability line and the action bar stay mounted across tabs; only the active tab's field rows
+ * render. The banks tab lists `banks.<id>` sections and opens one in a tabs-free form of its own,
+ * which reads `describe({ kind: "bank", id })` and writes through `applyScoped`.
+ *
  * ## Failure policy
  *
  * Nothing here may take the shell down. `ctx.remote` is read defensively, `$mount` is wrapped, the
@@ -49,7 +57,8 @@ import {
   SERVICE_KEY,
   SETTINGS_SLOT,
   UNSET_TEXT,
-  buildSections,
+  banksScopeText,
+  buildTabs,
   describeAvailability,
   diffDraft,
   draftFromFields,
@@ -58,13 +67,20 @@ import {
   formatFieldValue,
   isRecord,
   isSettingsView,
+  pathsReadOnlyText,
   readOnlyText,
   remoteErrorText,
   scopeLabel,
+  scopedEditorTitle,
   shadowText,
   summarizeApply,
+  valueSourceNote,
+  type ConfigScope,
+  type DraftDiff,
   type JsonValue,
+  type PageTab,
   type RemoteNamespace,
+  type ScopeMember,
   type ServiceState,
   type SettingsFieldView,
   type SettingsView,
@@ -370,6 +386,11 @@ const STYLES = [
   ".dhs-warn{border-color:var(--dsw-alias-state-warn-primary,#b26a00);color:var(--dsw-alias-state-warn-primary,#b26a00)}",
   ".dhs-err{border-color:var(--dsw-alias-state-error-primary,#c0392b);color:var(--dsw-alias-state-error-primary,#c0392b)}",
   ".dhs-ok{color:var(--dsw-alias-state-success-primary,#1e7f4f)}",
+  ".dhs-tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--dsw-alias-border-l1,currentColor);padding-bottom:6px}",
+  ".dhs-tab{font:inherit;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary,inherit);cursor:pointer}",
+  ".dhs-tab:hover{background:var(--dsw-alias-bg-layer-2,transparent)}",
+  ".dhs-tab-active{background:var(--dsw-alias-bg-layer-2,transparent);border-color:var(--dsw-alias-border-l2,currentColor);color:var(--dsw-alias-label-primary,inherit);font-weight:600}",
+  ".dhs-tabpanel{display:flex;flex-direction:column;gap:8px}",
   ".dhs-group{border-top:1px solid var(--dsw-alias-border-l1,currentColor);padding-top:10px}",
   ".dhs-group:first-of-type{border-top:0;padding-top:0}",
   ".dhs-group-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:8px}",
@@ -395,6 +416,14 @@ const STYLES = [
   ".dhs-btn-primary{background:var(--dsw-alias-brand-primary,#3b6fd4);color:var(--dsw-alias-label-primary-foreground,#fff);border-color:transparent}",
   ".dhs-btn-mini{padding:2px 8px;font-size:11px}",
   ".dhs-hint{font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary,inherit)}",
+  ".dhs-bank{border:1px solid var(--dsw-alias-border-l2,currentColor);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px}",
+  ".dhs-bank-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}",
+  ".dhs-scope{border:1px dashed var(--dsw-alias-border-l2,currentColor);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px}",
+  ".dhs-scope-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}",
+  ".dhs-subhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}",
+  ".dhs-subhead-title{font-weight:600}",
+  ".dhs-add{display:flex;flex-wrap:wrap;align-items:center;gap:6px}",
+  ".dhs-add-input{flex:1 1 220px;min-width:160px}",
   ".dhs-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}",
 ].join("");
 
@@ -465,14 +494,62 @@ function createPage(
   };
 }
 
-interface SettingsFormProps {
-  readonly service: RemoteNamespace;
-  readonly report: (message: string) => void;
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// One scope's form state (top level, or one banks.<id> section)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** How a field's source is worded: the top level says "文件", a bank says "本 bank". */
+type ScopeKind = "top" | "bank";
+
+/**
+ * The top scope, spelled out.
+ *
+ * `describe`'s `scope` is optional, but the page always sends one: the SAME descriptor serves the
+ * top read and a bank read, and an explicit `{ kind: "top" }` is the one argument shape both calls
+ * share — no reliance on how a missing optional argument is marshalled.
+ */
+const TOP_SCOPE: ConfigScope = { kind: "top" };
+
+/** A stable, readable name for a scope, used in the diagnostic lines. */
+function scopeKey(scope: ConfigScope | undefined): string {
+  if (scope === undefined) return "top";
+  if (scope.kind === "bank") return `bank:${scope.id}`;
+  if (scope.kind === "path") return `path:${scope.dir}`;
+  return "top";
 }
 
-function SettingsForm(props: SettingsFormProps): React.ReactElement {
-  const { service, report } = props;
+/**
+ * Everything the action bar and the field rows need for ONE scope.
+ *
+ * The top form and a bank form are the same machine with a different `scope`: `undefined` means the
+ * top level (`describe()` / `apply()`), a scope means that section (`describe(scope)` /
+ * `applyScoped(scope, patch)`). Keeping it in one hook is what makes the bank form inherit the whole
+ * diff/notice/clear contract instead of re-deriving it.
+ */
+interface ScopeForm {
+  readonly view: SettingsView | undefined;
+  readonly draft: Readonly<Record<string, string>>;
+  readonly diff: DraftDiff;
+  readonly notice: Notice | null;
+  readonly busy: "save" | "reload" | undefined;
+  /** The line explaining why nothing can be saved, or `undefined` when saving is allowed. */
+  readonly availability: string | undefined;
+  readonly dirty: boolean;
+  readonly invalid: boolean;
+  readonly editable: boolean;
+  setField(key: string, next: string): void;
+  clearField(key: string): void;
+  save(): void;
+  discard(): void;
+  reload(): void;
+}
 
+function useScopeForm(
+  service: RemoteNamespace,
+  scope: ConfigScope | undefined,
+  report: (message: string) => void,
+  onSaved: (() => void) | undefined
+): ScopeForm {
   const [view, setView] = React.useState<SettingsView | undefined>(undefined);
   const [loadError, setLoadError] = React.useState<string | undefined>(undefined);
   const [draft, setDraft] = React.useState<Record<string, string>>({});
@@ -481,22 +558,24 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
   const [cleared, setCleared] = React.useState<ReadonlySet<string>>(() => new Set());
   const [notice, setNotice] = React.useState<Notice | null>(null);
 
+  const label = scopeKey(scope);
+
   const reload = React.useCallback(async (): Promise<void> => {
     setBusy("reload");
     try {
-      const result = await service.describe();
+      const result = await service.describe(scope ?? TOP_SCOPE);
       if (result.ok) {
         if (!isSettingsView(result.value)) {
           setLoadError("宿主返回的设置数据格式无法识别（缺少 path / fields）。");
           return;
         }
         setView(result.value);
-        const draft = draftFromFields(result.value.fields);
-        setDraft(draft);
+        const nextDraft = draftFromFields(result.value.fields);
+        setDraft(nextDraft);
         // What the page ACTUALLY received, with sample values: the difference between "the host sent
         // nothing" and "the page did not render it" is not visible from either side alone.
         report(
-          `describe: ${result.value.fields.length} fields, ${result.value.fields.filter((f) => f.inFile).length} with values, ${Object.values(draft).filter((v) => v !== "").length} non-empty drafts, sample=${JSON.stringify(
+          `describe(${label}): ${result.value.fields.length} fields, ${result.value.fields.filter((f) => f.inFile).length} with values, ${Object.values(nextDraft).filter((v) => v !== "").length} non-empty drafts, sample=${JSON.stringify(
             result.value.fields
               .filter((f) => f.inFile)
               .slice(0, 4)
@@ -513,26 +592,43 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
     } finally {
       setBusy(undefined);
     }
-  }, [service]);
+  }, [service, scope, label, report]);
 
   React.useEffect(() => {
     void reload();
   }, [reload]);
 
   const availability = describeAvailability({ state: { kind: "ready", service }, view, loadError });
-  const editable = availability === undefined;
 
   const diff = React.useMemo(
     () =>
       view === undefined
         ? { patch: {}, errors: [], changed: [] }
         : diffDraft(view.fields, draft, cleared),
-    [view, draft]
+    [view, draft, cleared]
   );
   const dirty = diff.changed.length > 0;
   const invalid = diff.errors.length > 0;
 
-  const onSave = React.useCallback((): void => {
+  const setField = React.useCallback((key: string, next: string): void => {
+    setDraft((current) => ({ ...current, [key]: next }));
+    setCleared((current) => {
+      if (!current.has(key)) return current;
+      const nextSet = new Set(current);
+      nextSet.delete(key);
+      return nextSet;
+    });
+  }, []);
+
+  const clearField = React.useCallback((key: string): void => {
+    // Clearing is an explicit act, not just an empty cell: a redacted secret carries no value to
+    // differ from, so the intent is recorded here and the diff turns it into `null` (which removes
+    // the key, so the setting falls back to the environment variable, then to the plugin default).
+    setDraft((current) => ({ ...current, [key]: "" }));
+    setCleared((current) => new Set(current).add(key));
+  }, []);
+
+  const save = React.useCallback((): void => {
     if (view === undefined) return;
     if (diff.errors.length > 0) {
       setNotice({
@@ -551,9 +647,14 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
     setNotice(null);
     void (async () => {
       try {
-        const result = await service.apply(diff.patch as Record<string, JsonValue>);
+        const patch = diff.patch as Record<string, JsonValue>;
+        const result =
+          scope === undefined
+            ? await service.apply(patch)
+            : await service.applyScoped(scope, patch);
         if (result.ok) {
-          setNotice({ kind: "ok", text: summarizeApply(diff.patch, result.value) });
+          setNotice({ kind: "ok", text: summarizeApply(patch, result.value) });
+          if (onSaved !== undefined) onSaved();
         } else {
           setNotice({ kind: "err", text: `保存失败：${remoteErrorText(result.error)}` });
         }
@@ -564,31 +665,60 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
         await reload();
       }
     })();
-  }, [view, diff, service, reload]);
+  }, [view, diff, service, scope, reload, onSaved]);
 
-  const onClear = React.useCallback((key: string): void => {
-    // Clearing is an explicit act, not just an empty cell: a redacted secret carries no value to
-    // differ from, so the intent is recorded here and the diff turns it into `null` (which removes
-    // the key, so the setting falls back to the environment variable, then to the plugin default).
-    setDraft((current) => ({ ...current, [key]: "" }));
-    setCleared((current) => new Set(current).add(key));
-  }, []);
-
-  const onDiscard = React.useCallback((): void => {
+  const discard = React.useCallback((): void => {
     if (view !== undefined) setDraft(draftFromFields(view.fields));
     setCleared(new Set());
     setNotice({ kind: "info", text: "已丢弃未保存的改动。" });
   }, [view]);
 
-  const disabled = !editable || busy !== undefined;
-  const sections = React.useMemo(
-    () => (view === undefined ? [] : buildSections(view.fields)),
-    [view]
-  );
+  const reloadNow = React.useCallback((): void => {
+    void reload();
+  }, [reload]);
+
+  return {
+    view,
+    draft,
+    diff,
+    notice,
+    busy,
+    availability,
+    dirty,
+    invalid,
+    editable: availability === undefined,
+    setField,
+    clearField,
+    save,
+    discard,
+    reload: reloadNow,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// The top-level form: header + tabs + the always-visible action bar
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+interface SettingsFormProps {
+  readonly service: RemoteNamespace;
+  readonly report: (message: string) => void;
+}
+
+function SettingsForm(props: SettingsFormProps): React.ReactElement {
+  const { service, report } = props;
+  const form = useScopeForm(service, undefined, report, undefined);
+  // Empty means "no explicit choice yet": the fallback below resolves it to the FIRST group tab.
+  const [activeTab, setActiveTab] = React.useState<string>("");
+
+  const tabs = React.useMemo(() => buildTabs(form.view?.fields ?? []), [form.view]);
+  // Default to the first group tab; an unknown active id (a view that lost a group) falls back too.
+  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const groupCount = tabs.filter((tab) => tab.kind === "group").length;
+  const disabled = !form.editable || form.busy !== undefined;
 
   return React.createElement(
     "div",
-    { className: "dhs-page", "data-plugin-hindsight-settings": view?.path ?? "" },
+    { className: "dhs-page", "data-plugin-hindsight-settings": form.view?.path ?? "" },
     React.createElement(
       "div",
       { className: "dhs-head" },
@@ -596,9 +726,9 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
       React.createElement(
         "span",
         { className: "dhs-sub" },
-        view === undefined
+        form.view === undefined
           ? LOADING_TEXT
-          : `${view.fields.length} 个配置项 · 分组 ${sections.length} 个`
+          : `${form.view.fields.length} 个配置项 · 分组 ${groupCount} 个`
       )
     ),
     // The path is whatever the host resolved, so this line is correct on every OS.
@@ -606,103 +736,384 @@ function SettingsForm(props: SettingsFormProps): React.ReactElement {
       "div",
       { className: "dhs-note" },
       "本页直接读写宿主当前使用的配置文件：",
-      React.createElement("code", null, view?.path ?? LOADING_TEXT),
+      React.createElement("code", null, form.view?.path ?? LOADING_TEXT),
       React.createElement("br", null),
       "留空并保存＝删除该键，该项随即回退到环境变量，再回退到插件默认值。"
     ),
-    availability === undefined
+    form.availability === undefined
       ? null
-      : React.createElement("div", { className: "dhs-note dhs-warn" }, availability),
-    ...sections.map((section) =>
-      React.createElement(
-        "div",
-        { className: "dhs-group", key: section.group.id },
+      : React.createElement("div", { className: "dhs-note dhs-warn" }, form.availability),
+    React.createElement(
+      "div",
+      { className: "dhs-tabs", role: "tablist" },
+      ...tabs.map((tab) =>
         React.createElement(
-          "div",
-          { className: "dhs-group-head" },
-          React.createElement("span", { className: "dhs-group-title" }, section.group.title),
-          React.createElement("span", { className: "dhs-sub" }, section.group.summary)
-        ),
-        ...section.fields.map((field) =>
-          React.createElement(FieldRow, {
-            key: field.key,
-            field,
-            draft: draft[field.key] ?? "",
-            disabled,
-            onDraft: (next: string) => {
-              setDraft((current) => ({ ...current, [field.key]: next }));
-              setCleared((current) => {
-                if (!current.has(field.key)) return current;
-                const next2 = new Set(current);
-                next2.delete(field.key);
-                return next2;
-              });
-            },
-            onClear: () => onClear(field.key),
-          })
+          "button",
+          {
+            key: tab.id,
+            type: "button",
+            role: "tab",
+            "aria-selected": tab.id === active?.id,
+            className: tab.id === active?.id ? "dhs-tab dhs-tab-active" : "dhs-tab",
+            onClick: () => setActiveTab(tab.id),
+          },
+          tab.title
         )
       )
     ),
     React.createElement(
       "div",
-      { className: "dhs-actions" },
-      React.createElement(
-        "button",
-        {
-          type: "button",
-          className: "dhs-btn dhs-btn-primary",
-          // Left enabled while a field is invalid so the click can say WHICH field it is.
-          disabled: disabled || (!dirty && !invalid),
-          onClick: onSave,
-        },
-        busy === "save" ? "保存中…" : dirty ? `保存（${diff.changed.length} 项）` : "保存"
-      ),
-      React.createElement(
-        "button",
-        { type: "button", className: "dhs-btn", disabled: busy !== undefined, onClick: onDiscard },
-        "撤销修改"
-      ),
-      React.createElement(
-        "button",
-        {
-          type: "button",
-          className: "dhs-btn",
-          disabled: busy !== undefined,
-          onClick: () => void reload(),
-        },
-        busy === "reload" ? "重新读取中…" : "重新读取"
-      ),
-      invalid
-        ? React.createElement(
-            "span",
-            { className: "dhs-hint dhs-err", "data-validation": "errors" },
-            `有 ${diff.errors.length} 个字段不合法，不会提交：${diff.errors
-              .map((entry) => entry.message)
-              .join(" ")}`
-          )
-        : null,
-      notice === null
+      { className: "dhs-tabpanel", role: "tabpanel" },
+      active === undefined
         ? null
-        : React.createElement(
-            "span",
-            {
-              className:
-                notice.kind === "ok"
-                  ? "dhs-hint dhs-ok"
-                  : notice.kind === "err"
-                    ? "dhs-hint dhs-err"
-                    : "dhs-hint",
-            },
-            notice.text
+        : active.kind === "banks"
+          ? React.createElement(BanksPanel, {
+              service,
+              report,
+              members: form.view?.banks ?? [],
+              paths: form.view?.paths ?? [],
+              onChanged: form.reload,
+            })
+          : renderGroup(active, form, disabled)
+    ),
+    React.createElement(ActionBar, { form, saveLabel: "保存" })
+  );
+}
+
+/** One group tab's body: the heading, then that group's field rows only. */
+function renderGroup(tab: PageTab, form: ScopeForm, disabled: boolean): React.ReactElement {
+  return React.createElement(
+    "div",
+    { className: "dhs-group" },
+    React.createElement(
+      "div",
+      { className: "dhs-group-head" },
+      React.createElement("span", { className: "dhs-group-title" }, tab.title),
+      React.createElement("span", { className: "dhs-sub" }, tab.summary)
+    ),
+    tab.fields.length === 0
+      ? React.createElement("div", { className: "dhs-meta" }, "本组暂无配置项。")
+      : React.createElement(FieldRows, {
+          fields: tab.fields,
+          form,
+          scopeKind: "top",
+          disabled,
+        })
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// The 按项目（banks） tab
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+interface BanksPanelProps {
+  readonly service: RemoteNamespace;
+  readonly report: (message: string) => void;
+  readonly members: readonly ScopeMember[];
+  readonly paths: readonly ScopeMember[];
+  readonly onChanged: () => void;
+}
+
+/**
+ * The banks browser.
+ *
+ * The list itself comes from the top read (`view.banks`), so it is always the file's real content;
+ * a newly typed id is not in it yet and is labelled as a new section until it is saved.
+ */
+function BanksPanel(props: BanksPanelProps): React.ReactElement {
+  const { service, report, members, paths, onChanged } = props;
+  const [openId, setOpenId] = React.useState<string | undefined>(undefined);
+  const [newId, setNewId] = React.useState("");
+  const [addError, setAddError] = React.useState<string | undefined>(undefined);
+
+  const open = members.find((member) => member.id === openId);
+
+  const onAdd = (): void => {
+    const candidate = newId.trim();
+    if (candidate === "") {
+      setAddError("请输入 bank id（不能为空）。");
+      return;
+    }
+    if (members.some((member) => member.id === candidate)) {
+      setAddError(`banks.${candidate} 已经存在，请直接从上面的列表打开。`);
+      return;
+    }
+    setAddError(undefined);
+    setNewId("");
+    setOpenId(candidate);
+  };
+
+  return React.createElement(
+    "div",
+    { className: "dhs-scope" },
+    React.createElement("div", { className: "dhs-note" }, banksScopeText()),
+    React.createElement(
+      "div",
+      { className: "dhs-subhead" },
+      React.createElement("span", { className: "dhs-subhead-title" }, "已有 bank"),
+      React.createElement("span", { className: "dhs-chip" }, `${members.length} 个`)
+    ),
+    members.length === 0
+      ? React.createElement("div", { className: "dhs-meta" }, "文件里还没有 banks 段落。")
+      : React.createElement(
+          React.Fragment,
+          null,
+          ...members.map((member) =>
+            React.createElement(
+              "div",
+              { className: "dhs-bank", key: member.id },
+              React.createElement(
+                "div",
+                { className: "dhs-bank-head" },
+                React.createElement("code", { className: "dhs-key" }, `banks.${member.id}`),
+                React.createElement(
+                  "span",
+                  { className: "dhs-chip" },
+                  `${member.keys.length} 个键`
+                ),
+                React.createElement(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dhs-btn dhs-btn-mini",
+                    onClick: () => setOpenId(openId === member.id ? undefined : member.id),
+                  },
+                  openId === member.id ? "收起" : "打开"
+                )
+              ),
+              member.keys.length === 0
+                ? null
+                : React.createElement(
+                    "div",
+                    { className: "dhs-meta" },
+                    `已设置：${member.keys.join("、")}`
+                  )
+            )
+          )
+        ),
+    React.createElement(
+      "div",
+      { className: "dhs-add" },
+      React.createElement("input", {
+        className: "dhs-input dhs-add-input",
+        type: "text",
+        value: newId,
+        spellCheck: false,
+        placeholder: "新增 bank id，例如 coding-agent::my-repo",
+        "aria-label": "新增 bank id",
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+          setNewId(event.target.value);
+          setAddError(undefined);
+        },
+      }),
+      React.createElement(
+        "button",
+        { type: "button", className: "dhs-btn dhs-btn-mini", onClick: onAdd },
+        "新增"
+      )
+    ),
+    addError === undefined
+      ? null
+      : React.createElement("div", { className: "dhs-meta dhs-err" }, addError),
+    openId === undefined
+      ? null
+      : React.createElement(
+          "div",
+          { className: "dhs-scope", "data-bank": openId },
+          React.createElement(
+            "div",
+            { className: "dhs-subhead" },
+            React.createElement("span", { className: "dhs-subhead-title" }, `编辑 banks.${openId}`),
+            open === undefined
+              ? React.createElement("span", { className: "dhs-chip" }, "新段落")
+              : React.createElement("span", { className: "dhs-chip" }, `${open.keys.length} 个键`),
+            React.createElement(
+              "button",
+              {
+                type: "button",
+                className: "dhs-btn dhs-btn-mini",
+                onClick: () => setOpenId(undefined),
+              },
+              "关闭"
+            )
           ),
-      // The same message as a live region: the visual line is not announced by itself.
+          open === undefined
+            ? React.createElement(
+                "div",
+                { className: "dhs-meta" },
+                "保存后才会在文件里创建这一段。"
+              )
+            : null,
+          React.createElement(ScopedEditor, {
+            key: openId,
+            service,
+            report,
+            bankId: openId,
+            onSaved: onChanged,
+          })
+        ),
+    paths.length === 0
+      ? null
+      : React.createElement(
+          "div",
+          { className: "dhs-group" },
+          React.createElement(
+            "div",
+            { className: "dhs-subhead" },
+            React.createElement("span", { className: "dhs-subhead-title" }, "按路径（paths）"),
+            React.createElement("span", { className: "dhs-chip dhs-chip-ro" }, "只读")
+          ),
+          React.createElement("div", { className: "dhs-meta" }, pathsReadOnlyText()),
+          ...paths.map((member) =>
+            React.createElement(
+              "div",
+              { className: "dhs-meta", key: member.id },
+              React.createElement("code", { className: "dhs-key" }, `paths.${member.id}`),
+              ` · ${member.keys.length} 个键${member.keys.length === 0 ? "" : `：${member.keys.join("、")}`}`
+            )
+          )
+        )
+  );
+}
+
+interface ScopedEditorProps {
+  readonly service: RemoteNamespace;
+  readonly report: (message: string) => void;
+  readonly bankId: string;
+  readonly onSaved?: () => void;
+}
+
+/**
+ * One `banks.<id>` section, rendered with the same field rows as the top level but no tabs.
+ *
+ * Saving goes through `applyScoped`, which merges into that section only; removing a key there falls
+ * back to the top level, which is what the explanation above the form says.
+ */
+function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
+  const { service, report, bankId, onSaved } = props;
+  const scope = React.useMemo<ConfigScope>(() => ({ kind: "bank", id: bankId }), [bankId]);
+  const form = useScopeForm(service, scope, report, onSaved);
+  const fields = form.view?.fields ?? [];
+  const disabled = !form.editable || form.busy !== undefined;
+
+  return React.createElement(
+    "div",
+    { className: "dhs-scope", "data-scope": `bank:${bankId}` },
+    React.createElement(
+      "div",
+      { className: "dhs-scope-head" },
+      React.createElement("span", { className: "dhs-subhead-title" }, scopedEditorTitle(scope)),
       React.createElement(
         "span",
-        { role: "status", "aria-live": "polite", className: "dhs-sr" },
-        notice === null ? "" : notice.text
+        { className: "dhs-sub" },
+        form.view === undefined
+          ? LOADING_TEXT
+          : `${fields.length} 个配置项 · 文件：${form.view.path}`
       )
+    ),
+    React.createElement("div", { className: "dhs-note" }, banksScopeText()),
+    form.availability === undefined
+      ? null
+      : React.createElement("div", { className: "dhs-note dhs-warn" }, form.availability),
+    React.createElement(FieldRows, { fields, form, scopeKind: "bank", disabled }),
+    React.createElement(ActionBar, { form, saveLabel: `保存到 banks.${bankId}` })
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Shared pieces
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+interface FieldRowsProps {
+  readonly fields: readonly SettingsFieldView[];
+  readonly form: ScopeForm;
+  readonly scopeKind: ScopeKind;
+  readonly disabled: boolean;
+}
+
+function FieldRows(props: FieldRowsProps): React.ReactElement {
+  const { fields, form, scopeKind, disabled } = props;
+  return React.createElement(
+    React.Fragment,
+    null,
+    ...fields.map((field) =>
+      React.createElement(FieldRow, {
+        key: field.key,
+        field,
+        draft: form.draft[field.key] ?? "",
+        disabled,
+        scopeKind,
+        onDraft: (next: string) => form.setField(field.key, next),
+        onClear: () => form.clearField(field.key),
+      })
     )
   );
+}
+
+interface ActionBarProps {
+  readonly form: ScopeForm;
+  /** The save button's base label; the change count is appended when the form is dirty. */
+  readonly saveLabel: string;
+}
+
+/** Save / discard / reload plus the validation and notice lines, rendered for one scope. */
+function ActionBar(props: ActionBarProps): React.ReactElement {
+  const { form, saveLabel } = props;
+  const { diff, busy, editable } = form;
+  const disabled = !editable || busy !== undefined;
+  return React.createElement(
+    "div",
+    { className: "dhs-actions" },
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "dhs-btn dhs-btn-primary",
+        // Left enabled while a field is invalid so the click can say WHICH field it is.
+        disabled: disabled || (!form.dirty && !form.invalid),
+        onClick: form.save,
+      },
+      busy === "save"
+        ? "保存中…"
+        : form.dirty
+          ? `${saveLabel}（${diff.changed.length} 项）`
+          : saveLabel
+    ),
+    React.createElement(
+      "button",
+      { type: "button", className: "dhs-btn", disabled: busy !== undefined, onClick: form.discard },
+      "撤销修改"
+    ),
+    React.createElement(
+      "button",
+      { type: "button", className: "dhs-btn", disabled: busy !== undefined, onClick: form.reload },
+      busy === "reload" ? "重新读取中…" : "重新读取"
+    ),
+    form.invalid
+      ? React.createElement(
+          "span",
+          { className: "dhs-hint dhs-err", "data-validation": "errors" },
+          `有 ${diff.errors.length} 个字段不合法，不会提交：${diff.errors
+            .map((entry) => entry.message)
+            .join(" ")}`
+        )
+      : null,
+    form.notice === null
+      ? null
+      : React.createElement("span", { className: noticeClass(form.notice) }, form.notice.text),
+    // The same message as a live region: the visual line is not announced by itself.
+    React.createElement(
+      "span",
+      { role: "status", "aria-live": "polite", className: "dhs-sr" },
+      form.notice === null ? "" : form.notice.text
+    )
+  );
+}
+
+function noticeClass(notice: Notice): string {
+  if (notice.kind === "ok") return "dhs-hint dhs-ok";
+  if (notice.kind === "err") return "dhs-hint dhs-err";
+  return "dhs-hint";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -713,12 +1124,13 @@ interface FieldRowProps {
   readonly field: SettingsFieldView;
   readonly draft: string;
   readonly disabled: boolean;
+  readonly scopeKind: ScopeKind;
   readonly onDraft: (next: string) => void;
   readonly onClear: () => void;
 }
 
 function FieldRow(props: FieldRowProps): React.ReactElement {
-  const { field, draft, disabled, onDraft, onClear } = props;
+  const { field, draft, disabled, scopeKind, onDraft, onClear } = props;
 
   const onChange = (
     event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -750,7 +1162,7 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
           React.createElement(
             "span",
             { className: "dhs-hint" },
-            field.inFile ? "已写入文件" : `未写入文件（${fallbackText(field)}）`
+            valueSourceNote(field, scopeKind) ?? fallbackText(field)
           )
         );
       case "enum": {
@@ -787,6 +1199,9 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
           onChange,
           spellCheck: false,
           "aria-label": field.key,
+          // The host never sends a secret's value, so an in-file secret is an EMPTY box that is
+          // nevertheless set. The placeholder is the only place that distinction can live.
+          ...(field.inFile ? { placeholder: "已设置（不显示明文）· 留空＝不改动" } : {}),
         });
       case "stringList":
         return React.createElement("textarea", {
@@ -837,6 +1252,10 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
     ),
   ];
 
+  // Where the text in the box came from. Only for editable rows: a read-only row renders a `pre`
+  // and never shows the prefilled control, so the note would contradict what is on screen.
+  const sourceNote = field.editable ? valueSourceNote(field, scopeKind) : undefined;
+
   return React.createElement(
     "div",
     { className: "dhs-field", "data-field": field.key },
@@ -848,9 +1267,11 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
     ),
     React.createElement("div", { className: "dhs-summary" }, field.summary),
     input,
-    // The fallback chain, the harness shadow and the read-only reason are stated exactly when they
-    // apply — a page that shows an empty box without saying what it falls back to is the failure
-    // this whole surface exists to avoid.
+    // The source of the displayed value, then the fallback chain: a box showing the default must say
+    // so, and an empty box must not read as "the value is empty" when an exported variable decides it.
+    sourceNote === undefined
+      ? null
+      : React.createElement("div", { className: "dhs-meta" }, sourceNote),
     field.inFile
       ? null
       : React.createElement("div", { className: "dhs-meta" }, fallbackText(field)),
@@ -867,10 +1288,17 @@ function FieldRow(props: FieldRowProps): React.ReactElement {
             {
               type: "button",
               className: "dhs-btn dhs-btn-mini",
-              disabled,
+              // Removing a key the file does not set changes nothing, so the control is inert there.
+              disabled: disabled || !field.inFile,
               onClick: onClear,
             },
-            draft === "" ? `${UNSET_TEXT}（保存后删除该键）` : "清空（保存后删除该键）"
+            field.inFile
+              ? draft === "" && field.kind !== "secret"
+                ? // An empty cell for a value the file stores as "" is still a stored key.
+                  `${UNSET_TEXT}（保存后删除该键）`
+                : // A secret is ALWAYS an empty box while set, so its button always reads 清空.
+                  "清空（保存后删除该键）"
+              : "清空（文件中没有这一项）"
           ),
           field.kind === "secret"
             ? React.createElement(

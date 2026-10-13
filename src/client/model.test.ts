@@ -10,27 +10,32 @@
 import { describe, expect, it } from "vitest";
 import { CONFIG_FIELDS, FIELD_GROUPS, type FieldKind } from "../fields";
 import {
+  BANKS_TAB_ID,
   CONTRIBUTION,
   LOADING_TEXT,
   SERVICE_KEY,
   SETTINGS_SLOT,
   UNSET_TEXT,
   buildSections,
+  buildTabs,
   describeAvailability,
   diffDraft,
   draftFromFields,
   draftValueFor,
+  effectiveText,
   fallbackText,
   formatDefault,
   formatFieldValue,
   groupDescriptor,
   jsonEquals,
   parseDraft,
+  prefillValueFor,
   readOnlyText,
   remoteErrorText,
   scopeLabel,
   shadowText,
   summarizeApply,
+  valueSourceNote,
   type SettingsFieldView,
 } from "./model";
 
@@ -105,6 +110,46 @@ describe("sections", () => {
   });
 });
 
+describe("tabs", () => {
+  it("emits one tab per declared group in FIELD_GROUPS order, with banks last", () => {
+    const tabs = buildTabs([]);
+    expect(tabs.map((tab) => tab.id)).toEqual([
+      ...FIELD_GROUPS.map((group) => group.id),
+      BANKS_TAB_ID,
+    ]);
+    expect(tabs.filter((tab) => tab.kind === "group")).toHaveLength(FIELD_GROUPS.length);
+    expect(tabs.at(-1)?.kind).toBe("banks");
+    expect(tabs.at(-1)?.title).toContain("banks");
+    expect(tabs.at(-1)?.fields).toEqual([]);
+  });
+
+  it("puts a field only on its own group's tab", () => {
+    const fields = [
+      makeField({ key: "apiUrl", group: "connection", value: "http://x", inFile: true }),
+      makeField({ key: "logLevel", group: "scope", value: "info", inFile: true }),
+    ];
+    const tabs = buildTabs(fields);
+    const fieldsOf = (id: string): readonly string[] =>
+      tabs.find((tab) => tab.id === id)?.fields.map((field) => field.key) ?? [];
+    expect(fieldsOf("connection")).toEqual(["apiUrl"]);
+    expect(fieldsOf("scope")).toEqual(["logLevel"]);
+    expect(fieldsOf("recall")).toEqual([]);
+    expect(fieldsOf(BANKS_TAB_ID)).toEqual([]);
+  });
+
+  it("gives a host-reported unknown group its own tab instead of dropping its fields", () => {
+    const tabs = buildTabs([makeField({ key: "mystery", group: "brand-new" })]);
+    expect(tabs.map((tab) => tab.id)).toEqual([
+      ...FIELD_GROUPS.map((group) => group.id),
+      "brand-new",
+      BANKS_TAB_ID,
+    ]);
+    expect(tabs.find((tab) => tab.id === "brand-new")?.fields.map((f) => f.key)).toEqual([
+      "mystery",
+    ]);
+  });
+});
+
 describe("draft value round trip", () => {
   it("turns a scalar back into the text it came from", () => {
     expect(draftValueFor(makeField({ key: "apiUrl" }), "http://localhost:8888")).toBe(
@@ -128,6 +173,38 @@ describe("draft value round trip", () => {
       makeField({ key: "apiToken", kind: "secret", inFile: false }),
     ]);
     expect(draft).toEqual({ apiUrl: "http://x", apiToken: "" });
+  });
+
+  it("prefills the EFFECTIVE default when the file does not set a field", () => {
+    // apiPort is the reported case: unset in the file, default 9077, and previously an empty box.
+    const field = makeField({ key: "apiPort", kind: "number", defaultValue: 9077, inFile: false });
+    expect(effectiveText(field)).toBe("9077");
+    expect(prefillValueFor(field)).toBe("9077");
+    const draft = draftFromFields([
+      field,
+      makeField({ key: "apiUrl", value: "http://x", inFile: true, defaultValue: "http://d" }),
+      makeField({ key: "embedVersion", inFile: false }),
+    ]);
+    expect(draft).toEqual({ apiPort: "9077", apiUrl: "http://x", embedVersion: "" });
+  });
+
+  it("keeps the file's value ahead of the default, even when the two differ", () => {
+    const field = makeField({
+      key: "serverMode",
+      kind: "enum",
+      values: ["cloud", "self-hosted"],
+      defaultValue: "cloud",
+      value: "self-hosted",
+      inFile: true,
+    });
+    expect(prefillValueFor(field)).toBe("self-hosted");
+  });
+
+  it("does not prefill a secret's absent value", () => {
+    // A secret is redacted from every response: an in-file secret must stay an empty box (the row's
+    // placeholder is what says "已设置").
+    const field = makeField({ key: "apiToken", kind: "secret", value: null, inFile: true });
+    expect(prefillValueFor(field)).toBe("");
   });
 });
 
@@ -210,6 +287,29 @@ describe("diffDraft", () => {
     expect(diff.changed).toEqual([]);
   });
 
+  it("produces nothing for a freshly loaded form, prefilled defaults included", () => {
+    // The prefill is a baseline, not a pending write: opening the page (which now shows 9077 in
+    // apiPort) and pressing Save must still send an empty patch.
+    const fields = [
+      apiUrl,
+      makeField({ key: "apiPort", kind: "number", defaultValue: 9077, inFile: false }),
+      makeField({
+        key: "serverMode",
+        kind: "enum",
+        values: ["cloud"],
+        defaultValue: "cloud",
+        inFile: false,
+      }),
+      makeField({ key: "retainSessions", kind: "boolean", defaultValue: true, inFile: false }),
+      makeField({ key: "apiToken", kind: "secret", value: null, inFile: true }),
+      makeField({ key: "embedVersion", inFile: false }),
+    ];
+    const diff = diffDraft(fields, draftFromFields(fields));
+    expect(diff.patch).toEqual({});
+    expect(diff.changed).toEqual([]);
+    expect(diff.errors).toEqual([]);
+  });
+
   it("produces nothing for a field the file stores as an empty string", () => {
     // "empty in the file" and "cleared by the user" must not be confused: saving an untouched
     // empty value would otherwise delete a key the user never looked at.
@@ -245,12 +345,34 @@ describe("diffDraft", () => {
     expect(diffDraft(fields, { embedVersion: "" }).patch).toEqual({});
   });
 
-  it("writes a value the user typed into a field the file does not set", () => {
-    // Even when the typed text equals the default: the file still has to say it explicitly.
+  it("writes a value the user typed that DIFFERS from the displayed default", () => {
+    const fields = [
+      makeField({
+        key: "serverMode",
+        kind: "enum",
+        values: ["cloud", "self-hosted"],
+        defaultValue: "cloud",
+      }),
+    ];
+    expect(diffDraft(fields, { serverMode: "self-hosted" }).patch).toEqual({
+      serverMode: "self-hosted",
+    });
+  });
+
+  it("treats leaving the prefilled default alone as no change", () => {
+    // With prefill, the default is already in the box, so re-typing it is not a distinct act: the
+    // effective value is identical whether or not the file says it.
     const fields = [
       makeField({ key: "serverMode", kind: "enum", values: ["cloud"], defaultValue: "cloud" }),
     ];
-    expect(diffDraft(fields, { serverMode: "cloud" }).patch).toEqual({ serverMode: "cloud" });
+    expect(diffDraft(fields, { serverMode: "cloud" }).patch).toEqual({});
+  });
+
+  it("still treats clearing a prefilled field the file does not set as a no-op", () => {
+    const fields = [
+      makeField({ key: "apiPort", kind: "number", defaultValue: 9077, inFile: false }),
+    ];
+    expect(diffDraft(fields, { apiPort: "" }).patch).toEqual({});
   });
 
   it("treats a re-typed value as no change", () => {
@@ -326,6 +448,23 @@ describe("display", () => {
     expect(fallbackText(makeField({ key: "x" }))).toContain("上游默认未设值");
     expect(shadowText()).toContain("harnesses.dsh");
     expect(readOnlyText()).toContain("只能在配置文件里编辑");
+  });
+
+  it("says where the value in the box came from", () => {
+    expect(valueSourceNote(makeField({ key: "apiUrl", value: "http://x", inFile: true }))).toBe(
+      "来自配置文件"
+    );
+    expect(valueSourceNote(makeField({ key: "apiPort", kind: "number", defaultValue: 9077 }))).toBe(
+      "未写入文件；显示的是默认值 9077"
+    );
+    expect(valueSourceNote(makeField({ key: "embedVersion" }))).toBeUndefined();
+    // A bank scope must not claim the default IS the effective value: the top level wins there.
+    const bankNote = valueSourceNote(
+      makeField({ key: "apiPort", kind: "number", defaultValue: 9077 }),
+      "bank"
+    );
+    expect(bankNote).toContain("本 bank");
+    expect(bankNote).toContain("顶层");
   });
 });
 
@@ -423,13 +562,29 @@ describe("contribution contract", () => {
   it("declares every method with a unique id and a direct invocation", () => {
     const descriptors = CONTRIBUTION.descriptors as readonly Record<string, unknown>[];
     expect(CONTRIBUTION.package).toBe("@local/dsh-hindsight-settings");
-    // `note` carries the browser half's diagnostics; it sits between the two data methods.
-    expect(descriptors.map((d) => d.method)).toEqual(["describe", "note", "apply"]);
+    // `note` carries the browser half's diagnostics; `applyScoped` is the banks.<id> write, and both
+    // data methods sit next to it.
+    expect(descriptors.map((d) => d.method)).toEqual(["describe", "note", "applyScoped", "apply"]);
     expect(new Set(descriptors.map((d) => d.id)).size).toBe(descriptors.length);
     for (const descriptor of descriptors) {
       expect(descriptor.service).toBe("hindsightSettings");
       expect(descriptor.namespace).toBe("hindsightSettings");
       expect(descriptor.invocation).toEqual({ kind: "direct" });
+    }
+  });
+
+  it("declares describe's optional scope and applyScoped's scope+patch", () => {
+    // Found by method, never by index: the top-scope read is a zero-argument call and the scoped one
+    // passes a scope, so the optional parameter has to be declared exactly like the host manifest's.
+    const describeDescriptor = descriptorOf(CONTRIBUTION, "describe");
+    expect(describeDescriptor.parameters?.map((parameter) => parameter.name)).toEqual(["scope"]);
+    expect(describeDescriptor.parameters?.[0]?.codec?.mode).toBe("strict");
+
+    const scoped = descriptorOf(CONTRIBUTION, "applyScoped");
+    expect(scoped.parameters?.map((parameter) => parameter.name)).toEqual(["scope", "patch"]);
+    for (const parameter of scoped.parameters ?? []) {
+      expect(parameter.source).toBe("json");
+      expect(parameter.codec?.mode).toBe("strict");
     }
   });
 

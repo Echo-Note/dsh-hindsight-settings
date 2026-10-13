@@ -29,7 +29,9 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"*.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"*.ts\"",
-    "test:typert": "node scripts/typert-selfcheck.mjs"
+    "test:typert": "node scripts/typert-selfcheck.mjs",
+    "test:contract": "node scripts/contract-crosscheck.mjs",
+    "test:all": "npm run test && npm run test:smoke && npm run test:typert && npm run test:contract"
   },
   "dependencies": {
     "@vectorize-io/hindsight-coding-agents": "^0.8.1"

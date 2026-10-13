@@ -60,18 +60,43 @@ export interface SettingsFieldView {
   readonly shadowedByHarness: boolean;
 }
 
+/**
+ * The layer a read or write addresses.
+ *
+ * `top` is the shared file level; `bank` is one `banks.<id>` section; `path` is one `paths.<dir>`
+ * section. `describe()` accepts the scope as an OPTIONAL argument (the host defaults it to `top`), so
+ * `describe()` and `describe({ kind: "top" })` mean the same thing.
+ */
+export type ConfigScope =
+  | { readonly kind: "top" }
+  | { readonly kind: "bank"; readonly id: string }
+  | { readonly kind: "path"; readonly dir: string };
+
+/** One `banks.<id>` / `paths.<dir>` section the file already carries, with the keys it sets. */
+export interface ScopeMember {
+  readonly id: string;
+  readonly keys: readonly string[];
+}
+
 /** What `describe()` answers. */
 export interface SettingsView {
   /** The config file's real path, resolved by the host — never assume a platform layout. */
   readonly path: string;
+  /** Which layer these values came from; absent means the top level. */
+  readonly scope?: ConfigScope;
   /** Set when the file exists but cannot be parsed; the page must not offer to save then. */
   readonly error?: string;
   readonly fields: readonly SettingsFieldView[];
+  /** Present on a top-level read: the bank sections the file already holds. */
+  readonly banks?: readonly ScopeMember[];
+  /** Present on a top-level read: the path sections the file already holds. */
+  readonly paths?: readonly ScopeMember[];
 }
 
-/** What `apply()` answers. */
+/** What `apply()` / `applyScoped()` answer. */
 export interface ApplyResult {
   readonly path: string;
+  readonly scope?: ConfigScope;
   readonly changed: boolean;
   readonly removed: readonly string[];
 }
@@ -87,8 +112,15 @@ export type RemoteResult<T> =
 
 /** The `remote.<namespace>` service the client half mounts and then addresses. */
 export interface RemoteNamespace {
-  describe(): Promise<RemoteResult<SettingsView>>;
+  /** The top level when no scope is given (the host's own default). */
+  describe(scope?: ConfigScope): Promise<RemoteResult<SettingsView>>;
+  /** A top-level write. */
   apply(patch: Record<string, JsonValue>): Promise<RemoteResult<ApplyResult>>;
+  /** The same write, addressed at one `banks.<id>` / `paths.<dir>` section. */
+  applyScoped(
+    scope: ConfigScope,
+    patch: Record<string, JsonValue>
+  ): Promise<RemoteResult<ApplyResult>>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -128,17 +160,33 @@ export const SERVICE_KEY = `remote.${SERVICE_NAMESPACE}`;
 const CONTRIBUTION_PACKAGE = "@local/dsh-hindsight-settings";
 
 /**
+ * A pass-through STRICT codec for a plain-JSON payload.
+ *
+ * `$mount` refuses a Client parameter whose `codec.mode` is not `'strict'`; the `create()` factory
+ * only has to validate, and every payload here is plain JSON by construction (see the host's
+ * `service.ts`), so there is no second schema to drift out of sync.
+ */
+function jsonCodec(typeSymbol: string): {
+  readonly mode: "strict";
+  readonly typeSymbol: string;
+  readonly create: () => { parse(value: unknown): unknown };
+} {
+  return { mode: "strict", typeSymbol, create: () => ({ parse: (value: unknown) => value }) };
+}
+
+/**
  * The Client-for-Host contribution handed to `ctx.remote.$mount()`.
  *
  * Two rules from the gateway are load-bearing and are asserted by the unit tests:
  *
  *  1. every parameter of a Client contribution needs a STRICT codec — `$mount` rejects a parameter
  *     whose `codec.mode` is not `'strict'` before any method becomes callable;
- *  2. a RESULT may be `src-json`, which is what both methods use because they return plain JSON the
+ *  2. a RESULT may be `src-json`, which is what every method uses because they return plain JSON the
  *     client needs no schema for.
  *
- * The `create()` factories are pass-through parsers: both payloads are plain JSON by construction
- * (see the host's `service.ts`), so there is no second schema here to drift out of sync.
+ * `describe` declares its optional `scope` argument (with `acceptsUndefined`) exactly as the host
+ * manifest does, so both `describe()` and `describe({ kind: "bank", id })` dispatch; `applyScoped`
+ * takes the scope and the patch in that order.
  */
 export const CONTRIBUTION = deepFreeze({
   package: CONTRIBUTION_PACKAGE,
@@ -149,7 +197,17 @@ export const CONTRIBUTION = deepFreeze({
       namespace: SERVICE_NAMESPACE,
       method: "describe",
       invocation: { kind: "direct" },
-      parameters: [],
+      parameters: [
+        {
+          name: "scope",
+          wire: "scope",
+          source: "json",
+          codec: jsonCodec(`${CONTRIBUTION_PACKAGE}#ConfigScope`),
+          // Optional: a call with no argument means the file's top level, so the page's default
+          // top-scope read stays a zero-argument call.
+          acceptsUndefined: true,
+        },
+      ],
       result: { mode: "src-json" },
     },
     {
@@ -166,11 +224,31 @@ export const CONTRIBUTION = deepFreeze({
           name: "message",
           wire: "message",
           source: "json",
-          codec: {
-            mode: "strict",
-            typeSymbol: `${CONTRIBUTION_PACKAGE}#ClientNote`,
-            create: () => ({ parse: (value: unknown) => value }),
-          },
+          codec: jsonCodec(`${CONTRIBUTION_PACKAGE}#ClientNote`),
+        },
+      ],
+      result: { mode: "src-json" },
+    },
+    {
+      // One `banks.<id>` (or `paths.<dir>`) section: how a single bank differs from the shared top
+      // level the other two methods address.
+      id: `${CONTRIBUTION_PACKAGE}#${SERVICE_NAMESPACE}/applyScoped`,
+      service: SERVICE_NAMESPACE,
+      namespace: SERVICE_NAMESPACE,
+      method: "applyScoped",
+      invocation: { kind: "direct" },
+      parameters: [
+        {
+          name: "scope",
+          wire: "scope",
+          source: "json",
+          codec: jsonCodec(`${CONTRIBUTION_PACKAGE}#ConfigScope`),
+        },
+        {
+          name: "patch",
+          wire: "patch",
+          source: "json",
+          codec: jsonCodec(`${CONTRIBUTION_PACKAGE}#SettingsPatch`),
         },
       ],
       result: { mode: "src-json" },
@@ -186,11 +264,7 @@ export const CONTRIBUTION = deepFreeze({
           name: "patch",
           wire: "patch",
           source: "json",
-          codec: {
-            mode: "strict",
-            typeSymbol: `${CONTRIBUTION_PACKAGE}#SettingsPatch`,
-            create: () => ({ parse: (value: unknown) => value }),
-          },
+          codec: jsonCodec(`${CONTRIBUTION_PACKAGE}#SettingsPatch`),
         },
       ],
       result: { mode: "src-json" },
@@ -301,6 +375,71 @@ export function buildSections(fields: readonly SettingsFieldView[]): readonly Fi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Tabs
+//
+// The page shows ONE group at a time: seven groups of settings in a single column was the "really
+// ugly" surface this upgrade removes. The tab list is derived from the same sections, so a group the
+// host reports but this build has no heading for still gets a tab (and does not vanish), and the
+// banks table is always the last tab.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The id of the final, non-group tab (“按项目”). */
+export const BANKS_TAB_ID = "__banks__";
+
+/** The banks tab's heading and one-line description. */
+export const BANKS_TAB_TITLE = "按项目（banks）";
+export const BANKS_TAB_SUMMARY = "为单个 bank / 仓库覆盖设置，其余 bank 仍用顶层值。";
+
+/** One entry in the page's tab bar. */
+export interface PageTab {
+  readonly id: string;
+  readonly title: string;
+  readonly summary: string;
+  /** `group` renders field rows; `banks` renders the scope browser. */
+  readonly kind: "group" | "banks";
+  /** The fields this tab renders; always empty for the banks tab. */
+  readonly fields: readonly SettingsFieldView[];
+}
+
+/** The tab bar: one tab per section, then the banks tab. */
+export function buildTabs(fields: readonly SettingsFieldView[]): readonly PageTab[] {
+  const tabs: PageTab[] = buildSections(fields).map((section) => ({
+    id: section.group.id,
+    title: section.group.title,
+    summary: section.group.summary,
+    kind: "group",
+    fields: section.fields,
+  }));
+  tabs.push({
+    id: BANKS_TAB_ID,
+    title: BANKS_TAB_TITLE,
+    summary: BANKS_TAB_SUMMARY,
+    kind: "banks",
+    fields: [],
+  });
+  return tabs;
+}
+
+/** What `banks.<id>` means, in the user's words, shown above the bank list. */
+export function banksScopeText(): string {
+  return "banks.<id> 覆盖该 bank 的设置（顶层仍对其余 bank 生效）；一个 bank 里的键删除后会回退到顶层。";
+}
+
+/** Why `paths` is listed but not edited. */
+export function pathsReadOnlyText(): string {
+  return "paths 按绝对目录前缀覆盖（paths.<目录>），通常不手写，因此本页只列出文件里已有的段落，请在配置文件中编辑。";
+}
+
+/** The heading for one bank section while it is open for editing. */
+export function scopedEditorTitle(scope: ConfigScope): string {
+  return scope.kind === "bank"
+    ? `banks.${scope.id}`
+    : scope.kind === "path"
+      ? `paths.${scope.dir}`
+      : "顶层";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Display
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -376,12 +515,49 @@ export function readOnlyText(): string {
   return "该项是文件专属的嵌套结构或宿主盖章字段，表单无法安全表达，只能在配置文件里编辑。";
 }
 
+/**
+ * The value shown for a field the file does not set: the plugin default, or nothing.
+ *
+ * The host does NOT send the environment variable's value — only its NAME — so the default is the
+ * closest honest thing the page can put in the box. For `apiPort` (unset in the file, default 9077)
+ * that is `9077` instead of an empty box that reads as "no value".
+ */
+export function effectiveText(field: SettingsFieldView): string {
+  return field.default === null || field.default === undefined
+    ? ""
+    : draftValueFor(field, field.default);
+}
+
+/**
+ * The text a freshly loaded form shows for one field.
+ *
+ * `inFile` wins: the file's value is the truth. Otherwise the effective default is prefilled so the
+ * user sees what the plugin will actually use. Prefilling is display-only — {@link diffDraft} uses
+ * this same text as the baseline, so an untouched form still produces an empty patch.
+ */
+export function prefillValueFor(field: SettingsFieldView): string {
+  return field.inFile ? draftValueFor(field, field.value) : effectiveText(field);
+}
+
+/** Where the text currently in a field's box came from, or `undefined` when there is nothing to say. */
+export function valueSourceNote(
+  field: SettingsFieldView,
+  scope: "top" | "bank" = "top"
+): string | undefined {
+  if (field.inFile) return "来自配置文件";
+  if (field.default === null || field.default === undefined) return undefined;
+  const shown = formatScalar(field.default);
+  return scope === "bank"
+    ? `本 bank 未覆盖该项；显示的是默认值 ${shown}（删除后回退到顶层）。`
+    : `未写入文件；显示的是默认值 ${shown}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Drafts
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Turn the file's value into the text an input starts with.
+ * Turn a stored value into the text an input starts with.
  *
  * The inverse of {@link parseDraft} for every editable kind — that round trip is what lets an
  * untouched field produce no write at all.
@@ -398,10 +574,15 @@ export function draftValueFor(field: SettingsFieldView, value: unknown): string 
   return String(value);
 }
 
-/** A fresh draft: every field's value as the file holds it, or the empty string when unset. */
+/**
+ * A fresh draft: the file's value where it has one, and the effective default where it does not.
+ *
+ * The prefilled default is a BASELINE, not a pending write: {@link diffDraft} compares against the
+ * same text, so opening the page and pressing Save sends nothing.
+ */
 export function draftFromFields(fields: readonly SettingsFieldView[]): Record<string, string> {
   const draft: Record<string, string> = {};
-  for (const field of fields) draft[field.key] = draftValueFor(field, field.value);
+  for (const field of fields) draft[field.key] = prefillValueFor(field);
   return draft;
 }
 
@@ -486,12 +667,15 @@ export interface DraftDiff {
  *
  * Two gates keep this from rewriting a config the user never touched:
  *
- *  1. a cell whose text equals the text the file produced is skipped outright — this is what makes
- *     "open the page and press Save" a no-op even for an empty string stored in the file;
+ *  1. a cell whose text equals the text a fresh form shows is skipped outright — the baseline is
+ *     {@link prefillValueFor}, so this covers both "the file stores this exact text" (including an
+ *     empty string stored in the file) and "the file stores nothing and the box shows the default";
  *  2. a parsed value equal to the file's value is skipped, so reformatting a list does not write.
  *
- * A field the file does not set produces a write only when the user typed something into it: clearing
- * an already-unset field is not a removal. Fields the host marks `editable: false` are never touched.
+ * The prefilled default is therefore never written by itself: only a cell the user actually changed
+ * (or explicitly cleared) produces an entry. A field the file does not set produces a write only when
+ * the user typed something DIFFERENT from the displayed default; clearing it stays a no-op. Fields
+ * the host marks `editable: false` are never touched.
  */
 export function diffDraft(
   fields: readonly SettingsFieldView[],
@@ -510,7 +694,9 @@ export function diffDraft(
   for (const field of fields) {
     if (!field.editable) continue;
     const raw = draft[field.key] ?? "";
-    const baselineText = field.inFile ? draftValueFor(field, field.value) : "";
+    // The baseline is what the box was prefilled with, NOT the empty string: a default shown in an
+    // unset field must not become a write just because the user opened the page.
+    const baselineText = prefillValueFor(field);
     if (raw === baselineText && !cleared.has(field.key)) continue;
     if (cleared.has(field.key)) {
       // Removing a key the file does not set changes nothing.
