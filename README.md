@@ -13,6 +13,18 @@ service, and leaves the plugin untouched.
 
 ## Install
 
+From a clone of this repository (the built `lib/` is committed, so the build is optional):
+
+```bash
+git clone https://github.com/Echo-Note/dsh-hindsight-settings.git
+cd dsh-hindsight-settings
+npm install          # dev dependencies only; nothing is needed at runtime but the peer packages
+npm run build        # optional: refreshes lib/ from src/
+dsh plugin --profile desktop add link:"$PWD"
+```
+
+Any other absolute path works the same way:
+
 ```bash
 dsh plugin --profile desktop add link:/absolute/path/to/this/package
 ```

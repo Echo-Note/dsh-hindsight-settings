@@ -80,7 +80,7 @@ writeFileSync(
   file,
   JSON.stringify({
     serverMode: "self-hosted",
-    apiUrl: "http://100.102.61.13:8888",
+    apiUrl: "http://127.0.0.1:8888",
     apiToken: "tok",
     bankId: "gaoxiaogang",
     autoInject: "reflect",
