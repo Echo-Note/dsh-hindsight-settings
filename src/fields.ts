@@ -134,7 +134,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     env: "HINDSIGHT_API_TOKEN",
     editable: true,
     scope: "global",
-    summary: "Bearer token。以 secret 字段处理，不会随表单响应回传。",
+    summary:
+      "Hindsight 的承载令牌（自托管＝你服务器要求的 key；Cloud＝账号 key）。它是【服务器/账号级】凭据，不携带用户身份：多人共用一个 key 时，隔离只取决于服务器端是否装了 tenant 扩展（一人一键一 schema），bank 名本身不是安全边界。Cloud 的 key 可按 bank 限定并可程序化创建/撤销。",
   },
   {
     key: "apiPort",

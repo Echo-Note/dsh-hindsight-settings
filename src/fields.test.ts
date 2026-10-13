@@ -121,6 +121,15 @@ describe("the routing fields explain the documented resolution order", () => {
     expect(text).toContain("动态");
   });
 
+  it("separates the credential from the isolation boundary, because a shared key has neither", () => {
+    const text = summaryOf("apiToken");
+    expect(text).toContain("服务器/账号级");
+    expect(text).toContain("不携带用户身份");
+    // The two documented ways to isolate users, so the row does not imply a token carries identity.
+    expect(text).toContain("tenant 扩展");
+    expect(text).toContain("不是安全边界");
+  });
+
   it("no longer claims banks and paths are file-only now that the page edits banks", () => {
     expect(summaryOf("banks")).toContain("按项目");
     expect(summaryOf("banks")).not.toContain("只能在配置文件里编辑");
