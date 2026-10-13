@@ -48,6 +48,13 @@ function upstreamResolvedKeys(text: string): readonly string[] {
   return keys.map((match) => match[1]!);
 }
 
+/** `BANK_OVERRIDE_EXCLUDED` as the bundle ships it: the keys a bank / path section may not carry. */
+function upstreamBankOverrideExcluded(text: string): readonly string[] {
+  const block = /var BANK_OVERRIDE_EXCLUDED = \[([\s\S]*?)\n\];/.exec(text)?.[1];
+  if (block === undefined) return [];
+  return [...block.matchAll(/"([A-Za-z]+)"/g)].map((match) => match[1]!);
+}
+
 describe("field table vs the installed plugin", () => {
   it.skipIf(source === undefined)("names every env variable upstream reads", () => {
     const upstream = upstreamEnvKeys(source!);
@@ -62,6 +69,18 @@ describe("field table vs the installed plugin", () => {
     expect([...upstream.keys()].filter((key) => !ours.has(key))).toEqual([]);
     expect([...ours.keys()].filter((key) => !upstream.has(key))).toEqual([]);
     for (const [key, env] of upstream) expect(ours.get(key)).toBe(env);
+  });
+
+  it.skipIf(source === undefined)("marks exactly the keys a bank section discards", () => {
+    // The page must not offer these for editing inside `banks.<id>`: upstream drops them on read
+    // ("strip them rather than let them read as effective"), so the write would look saved and do
+    // nothing. This ties the flag to the list the plugin actually ships, in both directions.
+    const upstream = upstreamBankOverrideExcluded(source!);
+    expect(upstream.length).toBeGreaterThan(4);
+    const ours = CONFIG_FIELDS.filter((field) => field.bankScopeIgnored === true).map(
+      (field) => field.key
+    );
+    expect([...ours].sort()).toEqual([...upstream].sort());
   });
 
   it.skipIf(source === undefined)("covers every key upstream resolves", () => {

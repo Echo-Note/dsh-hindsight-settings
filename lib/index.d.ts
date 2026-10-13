@@ -52,6 +52,20 @@ interface ConfigField {
     /** False = the page renders it read-only (see the module doc for why). */
     readonly editable: boolean;
     readonly scope: FieldScope;
+    /**
+     * True when upstream DISCARDS this key inside a `banks.<id>` or `paths.<prefix>` section.
+     *
+     * Upstream ships the list as `BANK_OVERRIDE_EXCLUDED` (bankId, bankIdTemplate, mapPathToBank,
+     * dynamicBankId, resolveWorktrees, optInOnly, optInPaths, harness) with the comment "strip them
+     * rather than let them read as effective" — a section naming them would only ever arrive too late,
+     * because bank resolution and the opt-in decision both happen BEFORE a section applies. A
+     * `harnesses.<name>` section is a plain flat merge and DOES honor them.
+     *
+     * The page must not offer these for editing inside a bank section: the write would land in the
+     * file and be ignored, which is worse than not offering it. `upstream.test.ts` compares this flag
+     * against the installed bundle's own list.
+     */
+    readonly bankScopeIgnored?: boolean;
     /** One line for the page, in every language the page can render. */
     readonly summary: LocalizedText;
 }

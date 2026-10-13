@@ -87,6 +87,7 @@ import {
   remoteErrorText,
   scopeLabel,
   scopedEditorTitle,
+  splitForScope,
   shadowText,
   summarizeApply,
   unsetText,
@@ -1330,7 +1331,9 @@ function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
   const { t } = copy;
   const scope = React.useMemo<ConfigScope>(() => ({ kind: "bank", id: bankId }), [bankId]);
   const form = useScopeForm(service, scope, report, copy, onSaved);
-  const fields = form.view?.fields ?? [];
+  const allFields = form.view?.fields ?? [];
+  const { offered, ignored } = splitForScope(allFields, scope);
+  const fields = offered;
   const disabled = !form.editable || form.busy !== undefined;
 
   return React.createElement(
@@ -1349,6 +1352,13 @@ function ScopedEditor(props: ScopedEditorProps): React.ReactElement {
       )
     ),
     React.createElement("div", { className: "dhs-note" }, banksScopeText(t)),
+    ignored.length === 0
+      ? null
+      : React.createElement(
+          "div",
+          { className: "dhs-note dhs-warn" },
+          t("editor.ignoredHere", { fields: ignored.join(t("banks.keySeparator")) })
+        ),
     form.availability === undefined
       ? null
       : React.createElement("div", { className: "dhs-note dhs-warn" }, form.availability),

@@ -58,6 +58,20 @@ export interface ConfigField {
   /** False = the page renders it read-only (see the module doc for why). */
   readonly editable: boolean;
   readonly scope: FieldScope;
+  /**
+   * True when upstream DISCARDS this key inside a `banks.<id>` or `paths.<prefix>` section.
+   *
+   * Upstream ships the list as `BANK_OVERRIDE_EXCLUDED` (bankId, bankIdTemplate, mapPathToBank,
+   * dynamicBankId, resolveWorktrees, optInOnly, optInPaths, harness) with the comment "strip them
+   * rather than let them read as effective" — a section naming them would only ever arrive too late,
+   * because bank resolution and the opt-in decision both happen BEFORE a section applies. A
+   * `harnesses.<name>` section is a plain flat merge and DOES honor them.
+   *
+   * The page must not offer these for editing inside a bank section: the write would land in the
+   * file and be ignored, which is worse than not offering it. `upstream.test.ts` compares this flag
+   * against the installed bundle's own list.
+   */
+  readonly bankScopeIgnored?: boolean;
   /** One line for the page, in every language the page can render. */
   readonly summary: LocalizedText;
 }
@@ -263,7 +277,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     env: "HINDSIGHT_BANK_ID",
     editable: true,
-    scope: "bank",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "Pin this bank. Resolution order: mapPathToBank → this setting → bankIdTemplate; once it is set, banks are no longer resolved dynamically per repository, unless dynamicBankId is true.",
       zh: "固定使用这个 bank。解析顺序：mapPathToBank → 本项 → bankIdTemplate；设了它就不再按仓库动态分库，除非 dynamicBankId 为 true。",
@@ -276,7 +291,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     env: "HINDSIGHT_DYNAMIC_BANK_ID",
     editable: true,
-    scope: "bank",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "By default it resolves dynamically when bankId is unset. true = resolve dynamically per repository even when bankId is set; false = force static, always using bankId.",
       zh: "默认在未设 bankId 时动态解析。设 true＝即使设了 bankId 也按仓库动态分库；设 false＝强制静态，始终用 bankId。",
@@ -289,7 +305,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: "coding-agent::{gitProject}",
     env: "HINDSIGHT_BANK_ID_TEMPLATE",
     editable: true,
-    scope: "bank",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "Template for the dynamic bank id; the default is coding-agent::{gitProject} (every agent shares one bank per repository). Placeholders: {gitProject} = the worktree-aware repository name (shared by every worktree of one repository; outside a repository, the name of the directory the session started in), {project} = the current directory name, {harness}, {channel}, {user}. To split per agent, write {harness}-{gitProject}.",
       zh: "动态 bank id 的模板，默认 coding-agent::{gitProject}（各 agent 共享同一个仓库 bank）。占位符：{gitProject}＝worktree 感知的仓库名（同一仓库的所有 worktree 共享；不在仓库中时取会话启动目录名）、{project}＝当前目录名、{harness}、{channel}、{user}。想按 agent 分开就写 {harness}-{gitProject}。",
@@ -301,7 +318,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     kind: "json",
     default: null,
     editable: false,
-    scope: "path",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "Absolute path → bank name; the longest prefix wins and it takes highest priority (it can override bankId); linked worktrees inherit the main checkout's mapping. A key→value map, editable only in the config file.",
       zh: "绝对路径 → bank 名；最长前缀生效，优先级最高（可盖过 bankId），linked worktree 继承主检出的映射。键值映射，仅文件可编辑。",
@@ -314,7 +332,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: true,
     env: "HINDSIGHT_RESOLVE_WORKTREES",
     editable: true,
-    scope: "bank",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "git worktrees share the main repository's bank (on by default).",
       zh: "git worktree 共用主仓库的 bank（默认开）。",
@@ -753,7 +772,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: false,
     env: "HINDSIGHT_OPT_IN_ONLY",
     editable: true,
-    scope: "global",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "Work only in the named directories; projects that are not listed leave no trace at all.",
       zh: "只在被点名的目录里工作；未列出的项目完全不留痕。",
@@ -766,7 +786,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: null,
     env: "HINDSIGHT_OPT_IN_PATHS",
     editable: true,
-    scope: "path",
+    scope: "harness",
+    bankScopeIgnored: true,
     summary: {
       en: "The named directories (matched by prefix, ~ supported); each repository beneath them still gets its own bank.",
       zh: "点名的目录（按前缀匹配，支持 ~），其下每个仓库仍各自成库。",
@@ -793,10 +814,11 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     default: "dsh",
     env: "HINDSIGHT_HARNESS",
     editable: false,
-    scope: "harness",
+    scope: "global",
+    bankScopeIgnored: true,
     summary: {
-      en: "The runtime adapter identifier. In DSH it is always dsh, written by the host — do not change it by hand.",
-      zh: "运行时适配器标识。在 DSH 里恒为 dsh，由宿主写入，不要手改。",
+      en: "Read by the deepen engine only: which session format --conversations is parsed as (upstream default opencode). Every DSH entry point passes its own harness (dsh) explicitly, so this setting has no effect in normal use.",
+      zh: "仅 deepen 引擎读取：--conversations 按哪种会话格式解析（上游默认 opencode）。DSH 的每个入口都会显式传入自己的 harness（dsh），所以日常使用中本项不起作用。",
     },
   },
   {

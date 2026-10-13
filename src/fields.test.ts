@@ -131,19 +131,59 @@ describe("field table", () => {
       return;
     }
 
-    /** Every quoted string a `summary:` / `title:` line holds, in the JSON form the table stores. */
-    const quotedLiterals = (text: string): string[] =>
-      [...text.matchAll(/\b(?:summary|title):\s*("(?:[^"\\]|\\.)*")/g)].flatMap((match) =>
-        match[1] === undefined ? [] : [match[1]]
-      );
+    /**
+     * The Chinese literal behind every `summary:` / `title:` entry.
+     *
+     * Anchored to the START OF A LINE: the table writes the two as object properties, while the
+     * interface above it declares `readonly summary: LocalizedText;`. An unanchored match counts
+     * those declarations too — each then scans forward and picks up a later entry's `zh:`, which
+     * inflates the list to 69 and makes the length assertion below meaningless.
+     *
+     * HEAD may hold either shape: the single-string table that predates the bilingual change, or the
+     * `{ en, zh }` object. Both are read here, because this guard's whole point is to compare against
+     * whatever the table looked like BEFORE this checkout's edits — a shape it did not anticipate
+     * yields zero literals and the guard silently stops guarding.
+     */
+    const chineseLiterals = (text: string): string[] => {
+      const out: string[] = [];
+      for (const match of text.matchAll(/^[ \t]*(?:summary|title):/gm)) {
+        // Scan only as far as this entry could plausibly reach: the single-string table puts the
+        // literal right after the colon, the bilingual one puts `zh:` after `en:`. Matching the
+        // whole object instead breaks on summaries that CONTAIN braces (JSON examples).
+        const rest = text.slice(match.index!, match.index! + 2_000);
+        const literal =
+          /^\s*("(?:[^"\\]|\\.)*")/.exec(rest)?.[1] ??
+          /\bzh:\s*("(?:[^"\\]|\\.)*")/.exec(rest)?.[1];
+        if (literal !== undefined) out.push(literal);
+      }
+      return out;
+    };
 
-    const committedLiterals = quotedLiterals(committed);
-    // 7 groups × (title + summary) + one summary per field.
+    const committedLiterals = chineseLiterals(committed);
+    // 7 groups × (title + summary) + one summary per field, in whichever shape HEAD holds.
     expect(committedLiterals).toHaveLength(FIELD_GROUPS.length * 2 + CONFIG_FIELDS.length);
+
+    /**
+     * Chinese this checkout reworded ON PURPOSE, each with the reason the old line was wrong.
+     *
+     * The loop below exists to stop an English edit from silently changing the Chinese; a
+     * description that was factually wrong must still be correctable, so every intended rewording is
+     * named here rather than waved through. An entry only matches while its literal is still in HEAD
+     * — that is, during the very change that rewords it — and is inert afterwards.
+     */
+    const rewordedOnPurpose: readonly string[] = [
+      // Claimed `harness` is "the runtime adapter identifier … written by the host, do not edit by
+      // hand". Upstream's RawConfig is narrower: the deepen engine reads it to know which session
+      // format `--conversations` is parsed as (default opencode), and every DSH entry point passes
+      // its own harness, so the key has no effect in normal use.
+      JSON.stringify("运行时适配器标识。在 DSH 里恒为 dsh，由宿主写入，不要手改。"),
+    ];
 
     const shipped = readFileSync(join(packageRoot, "src", "fields.ts"), "utf8");
     for (const literal of committedLiterals) {
+      if (rewordedOnPurpose.includes(literal)) continue;
       // The literal is the JSON-encoded form the table now must still carry verbatim.
+      // `literal` is the JSON-encoded source form, so a byte-level contains() is the comparison.
       expect(shipped.includes(literal), `${literal.slice(0, 24)} reworded`).toBe(true);
     }
   });
@@ -250,5 +290,42 @@ describe("the routing fields explain the documented resolution order in BOTH lan
     expect(textOf("banks", "en")).toContain("By project (banks)");
     expect(textOf("banks", "en")).not.toContain("only in the config file");
     expect(textOf("paths", "en")).toContain("Editable only in the file");
+  });
+});
+
+describe("keys a bank or path section cannot carry", () => {
+  const ignored = CONFIG_FIELDS.filter((field) => field.bankScopeIgnored === true).map(
+    (field) => field.key
+  );
+
+  it("marks the resolution and approval keys, and nothing else", () => {
+    // Upstream's BANK_OVERRIDE_EXCLUDED. The page offers these in the top-level form only.
+    expect([...ignored].sort()).toEqual(
+      [
+        "bankId",
+        "bankIdTemplate",
+        "dynamicBankId",
+        "harness",
+        "mapPathToBank",
+        "optInOnly",
+        "optInPaths",
+        "resolveWorktrees",
+      ].sort()
+    );
+  });
+
+  it("does not advertise them as overridable per bank or per path", () => {
+    for (const key of ignored) {
+      const field = CONFIG_FIELDS.find((entry) => entry.key === key)!;
+      expect(["bank", "path"]).not.toContain(field.scope);
+    }
+  });
+
+  it("keeps `harness` read-only, because every DSH entry point passes its own", () => {
+    const harness = CONFIG_FIELDS.find((field) => field.key === "harness")!;
+    expect(harness.editable).toBe(false);
+    // The documented meaning is the deepen engine's conversation format — not "which agent am I".
+    expect(harness.summary.zh).toContain("deepen");
+    expect(harness.summary.en).toContain("deepen");
   });
 });

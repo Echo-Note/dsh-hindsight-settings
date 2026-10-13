@@ -143,6 +143,8 @@ const EN = {
   "banks.keysCount": "{count} key(s)",
   "banks.keysSet": "Set: {keys}",
   "banks.keySeparator": ", ",
+  "editor.ignoredHere":
+    "Not listed here: {fields}. Upstream discards these keys inside a banks.<id> or paths.<prefix> section — bank resolution and the opt-in decision happen before a section applies — so set them at the top level.",
   "banks.open": "Open",
   "banks.close": "Collapse",
   "banks.newPlaceholder": "New bank id, for example coding-agent::my-repo",
@@ -323,6 +325,8 @@ const ZH: Readonly<Record<CanonicalCopyKey, string>> = {
   "banks.keysCount": "{count} 个键",
   "banks.keysSet": "已设置：{keys}",
   "banks.keySeparator": "、",
+  "editor.ignoredHere":
+    "此处不列出：{fields}。这些键写在 banks.<id> 或 paths.<前缀> 段里会被上游丢弃——bank 解析与 opt-in 判定发生在段生效之前——请改在顶层设置。",
   "banks.open": "打开",
   "banks.close": "收起",
   "banks.newPlaceholder": "新增 bank id，例如 coding-agent::my-repo",
@@ -844,6 +848,37 @@ export interface FieldSection {
  * A group the host reports but this build has no heading for keeps the raw id as its title (an
  * upstream rename then shows up as a visibly untitled section instead of losing its fields).
  */
+/**
+ * Split a scope's field list into the rows its editor may offer, and the keys upstream discards there.
+ *
+ * Upstream filters a `banks.<id>` (and `paths.<prefix>`) section through `BANK_OVERRIDE_EXCLUDED`:
+ * bank resolution and the opt-in decision both happen BEFORE a section applies, so those keys are
+ * dropped on read — its own comment says "strip them rather than let them read as effective".
+ * Offering them for editing would write a value that is silently ignored, which is worse than not
+ * offering it, so the editor omits them and names them instead.
+ *
+ * A `harnesses.<name>` section is a plain flat merge upstream and is NOT filtered; this page has no
+ * harness editor, so the split only applies to the bank scope it does expose.
+ */
+export function splitForScope(
+  fields: readonly SettingsFieldView[],
+  scope: ConfigScope
+): { readonly offered: readonly SettingsFieldView[]; readonly ignored: readonly string[] } {
+  if (scope.kind !== "bank" && scope.kind !== "path") return { offered: fields, ignored: [] };
+  const offered: SettingsFieldView[] = [];
+  const ignored: string[] = [];
+  for (const field of fields) {
+    if (fieldIsBankScopeIgnored(field.key)) ignored.push(field.key);
+    else offered.push(field);
+  }
+  return { offered, ignored };
+}
+
+/** True when the bundled table marks this key as discarded inside a bank / path section. */
+function fieldIsBankScopeIgnored(key: string): boolean {
+  return CONFIG_FIELDS.find((field) => field.key === key)?.bankScopeIgnored === true;
+}
+
 export function groupDescriptor(group: string, lang: ActiveLanguage): GroupDescriptor {
   const declared = FIELD_GROUPS.find((candidate) => candidate.id === group);
   return declared === undefined

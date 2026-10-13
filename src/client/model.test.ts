@@ -53,6 +53,7 @@ import {
   remoteErrorText,
   scopeLabel,
   scopedEditorTitle,
+  splitForScope,
   shadowText,
   summarizeApply,
   unsetText,
@@ -1179,5 +1180,41 @@ describe("the two dictionaries stay usable as one table", () => {
     expect(zh("title")).toBe(DICTIONARIES.zh.title);
     // A key present in only the table it was handed falls back rather than rendering `undefined`.
     expect(makeTranslate({ en: {}, zh: {} })("missing.key")).toBe("missing.key");
+  });
+});
+
+describe("splitForScope", () => {
+  const view = (key: string): SettingsFieldView =>
+    ({ ...makeField({ key }), value: null, inFile: false, shadowedByHarness: false }) as never;
+  const keys = [
+    "bankId",
+    "apiUrl",
+    "bankIdTemplate",
+    "optInOnly",
+    "logLevel",
+    "mapPathToBank",
+    "harness",
+  ];
+  const fields = keys.map(view);
+
+  it("offers every field at the top level", () => {
+    const { offered, ignored } = splitForScope(fields, { kind: "top" });
+    expect(offered.map((field) => field.key)).toEqual(keys);
+    expect(ignored).toEqual([]);
+  });
+
+  it("omits the keys upstream discards inside a bank section, and names them", () => {
+    const { offered, ignored } = splitForScope(fields, { kind: "bank", id: "coding-agent::x" });
+    expect(offered.map((field) => field.key)).toEqual(["apiUrl", "logLevel"]);
+    // Named, not silently dropped: the editor shows why they are missing.
+    expect([...ignored].sort()).toEqual(
+      ["bankId", "bankIdTemplate", "harness", "mapPathToBank", "optInOnly"].sort()
+    );
+  });
+
+  it("treats a path section the same way", () => {
+    const { offered, ignored } = splitForScope(fields, { kind: "path", dir: "/tmp/x" });
+    expect(offered.map((field) => field.key)).toEqual(["apiUrl", "logLevel"]);
+    expect(ignored).toContain("bankId");
   });
 });
